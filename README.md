@@ -21,9 +21,11 @@ Who's working, who's waiting on you, who just replied — one look. Costs **0 ex
 
 <div align="center">
 
-<video src="https://github.com/SenatorInPower/ClaudeDock/raw/main/media/claudedock-demo.mp4" poster="https://github.com/SenatorInPower/ClaudeDock/raw/main/media/claudedock-demo-poster.jpg" controls muted playsinline width="900"></video>
+<a href="media/claudedock-demo.mp4">
+  <img src="media/claudedock-demo.gif" alt="ClaudeDock demo — desktop dock, session table, web cockpit" width="900">
+</a>
 
-<sub>▶︎ 20‑sec tour — desktop dock → session table → web cockpit (abstract demo data). <a href="https://github.com/SenatorInPower/ClaudeDock/raw/main/media/claudedock-demo.mp4">Open the video</a> if it doesn't play inline.</sub>
+<sub>20‑sec tour — desktop dock → session table → web cockpit (abstract demo data). ▶︎ <a href="media/claudedock-demo.mp4">Watch the full video (with sound)</a>.</sub>
 
 </div>
 
