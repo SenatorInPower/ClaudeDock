@@ -800,10 +800,12 @@ class Dock:
                 f"Ждут решения: {snap.get('attention_count', 0)}      "
                 f"Сегодня: {cu.human_tokens(t['tokens_total'])} ток ≈{cu.human_cost(t['cost_usd'])}      "
                 f"Всего(на диске): {cu.human_tokens(tot['tokens_total'])} ≈{cu.human_cost(tot['cost_usd'])}")
+        tk.Label(win, text="✳ ClaudeDock", bg="#17150f", fg="#f5a623",
+                 font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", padx=14, pady=(11, 0))
         tk.Label(win, text=head, bg="#17150f", fg="#f4f1ea",
-                 font=("Segoe UI", 11, "bold"), anchor="w").pack(fill="x", padx=12, pady=(10, 2))
+                 font=("Segoe UI", 11, "bold"), anchor="w").pack(fill="x", padx=14, pady=(2, 2))
         tk.Label(win, text="🟧 работает · 🟦 ждёт · ❓ ждёт ВЫБОРА пунктов · ⚠ ждёт подтверждения действий · 🔴 новый ответ    —    двойной клик: написать в сессию (resume)",
-                 bg="#17150f", fg="#9a948a", font=("Segoe UI", 8), anchor="w").pack(fill="x", padx=12)
+                 bg="#17150f", fg="#9a948a", font=("Segoe UI", 8), anchor="w").pack(fill="x", padx=14)
 
         daily = snap.get("daily", {})
         if daily:
@@ -817,40 +819,60 @@ class Dock:
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("CU.Treeview", background="#201d17", foreground="#f4f1ea",
-                        fieldbackground="#201d17", rowheight=24, font=("Segoe UI", 9))
-        style.configure("CU.Treeview.Heading", background="#2b271f", foreground="#e8a33d",
-                        font=("Segoe UI", 9, "bold"))
+        style.layout("CU.Treeview", [("CU.Treeview.treearea", {"sticky": "nswe"})])
+        style.configure("CU.Treeview", background="#1e1b15", foreground="#f4f1ea",
+                        fieldbackground="#1e1b15", rowheight=31, borderwidth=0,
+                        relief="flat", font=("Segoe UI", 10))
+        style.map("CU.Treeview",
+                  background=[("selected", "#4a3f23")],
+                  foreground=[("selected", "#fff7e6")])
+        style.configure("CU.Treeview.Heading", background="#26221b", foreground="#e8a33d",
+                        font=("Segoe UI", 9, "bold"), relief="flat",
+                        borderwidth=0, padding=(10, 9))
+        style.map("CU.Treeview.Heading",
+                  background=[("active", "#332d23")],
+                  foreground=[("active", "#ffc05a")])
+        style.configure("CU.Vertical.TScrollbar", troughcolor="#1b1812",
+                        background="#3a3324", borderwidth=0, arrowcolor="#1b1812",
+                        width=12, gripcount=0)
+        style.map("CU.Vertical.TScrollbar", background=[("active", "#5a4d2c")])
+        style.layout("CU.Vertical.TScrollbar", [
+            ("CU.Vertical.TScrollbar.trough", {"sticky": "ns", "children": [
+                ("CU.Vertical.TScrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
 
         cols = ("status", "project", "task", "tokens", "cost", "model", "msgs", "age")
         tree = ttk.Treeview(win, columns=cols, show="headings", style="CU.Treeview")
-        headers = {"status": ("Статус", 100), "project": ("Проект", 148), "task": ("Задача", 300),
-                   "tokens": ("Токены", 78), "cost": ("≈$", 70), "model": ("Модель", 92),
-                   "msgs": ("Ответы", 58), "age": ("Возраст", 84)}
+        headers = {"status": ("Статус", 152), "project": ("Проект", 140), "task": ("Задача", 250),
+                   "tokens": ("Токены", 84), "cost": ("≈$", 66), "model": ("Модель", 104),
+                   "msgs": ("Ответы", 64), "age": ("Возраст", 92)}
+        right = ("tokens", "cost", "msgs", "age")
         for c_ in cols:
             txt, w = headers[c_]
-            tree.heading(c_, text=txt)
-            tree.column(c_, width=w, anchor="w" if c_ in ("project", "task") else "center")
+            tree.heading(c_, text=txt,
+                         anchor="w" if c_ in ("status", "project", "task") else "e" if c_ in right else "center")
+            anchor = "w" if c_ in ("status", "project", "task") else "e" if c_ in right else "center"
+            tree.column(c_, width=w, anchor=anchor, stretch=(c_ == "task"))
         tree.tag_configure("run", foreground="#f5c451")
         tree.tag_configure("wait", foreground="#5eb4ff")
-        tree.tag_configure("old", foreground="#9a948a")
-        tree.tag_configure("hl", background="#3a3220")
+        tree.tag_configure("old", foreground="#8f8980")
+        tree.tag_configure("evenrow", background="#1e1b15")
+        tree.tag_configure("oddrow", background="#242017")
+        tree.tag_configure("hl", background="#4a3f23")
 
         self._detail_map = {}
         sel_item = None
-        for s in snap["sessions"]:
+        for idx, s in enumerate(snap["sessions"]):
             st = s.get("status", "old")
-            tags = [st]
+            tags = ["evenrow" if idx % 2 == 0 else "oddrow", st]
             if s["session_id"] == highlight_sid:
                 tags.append("hl")
             age = s["age_sec"]
             age_s = (f"{age}s" if age < 90 else (f"{age // 60}m" if age < 5400 else
                      (f"{age // 3600}h" if age < 172800 else f"{age // 86400}d")))
-            stv = STATUS_LABEL.get(st, "○")
+            stv = " " + STATUS_LABEL.get(st, "○")
             aw = s.get("awaiting")
             if aw:
-                stv += {"question": " ❓выбор", "permission": " ⚠действия",
-                        "ask": " ❓вопрос"}.get(aw, "")
+                stv += {"question": " ❓", "permission": " ⚠", "ask": " ❓"}.get(aw, "")
             if s.get("unread"):
                 stv = "🔴 " + stv
             item = tree.insert("", "end", values=(
@@ -861,10 +883,10 @@ class Dock:
             if s["session_id"] == highlight_sid:
                 sel_item = item
 
-        vsb = ttk.Scrollbar(win, orient="vertical", command=tree.yview)
+        vsb = ttk.Scrollbar(win, orient="vertical", command=tree.yview, style="CU.Vertical.TScrollbar")
         tree.configure(yscrollcommand=vsb.set)
-        tree.pack(side="left", fill="both", expand=True, padx=(12, 0), pady=(0, 12))
-        vsb.pack(side="right", fill="y", pady=(0, 12), padx=(0, 12))
+        tree.pack(side="left", fill="both", expand=True, padx=(14, 10), pady=(2, 14))
+        vsb.pack(side="right", fill="y", pady=(2, 14), padx=(0, 12))
         if sel_item:
             tree.selection_set(sel_item)
             tree.see(sel_item)
