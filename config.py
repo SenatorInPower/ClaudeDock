@@ -29,6 +29,9 @@ _DEFAULTS = {
     "web_url_secret": "",
     "web_host": "127.0.0.1",
     "web_port": 8765,
+    # Optional password to control sessions remotely WITHOUT Telegram. Empty =
+    # off (remote control then needs Telegram; the local PC always works).
+    "web_password": "",
     # Path to the `claude` executable, only if it is not on your PATH.
     "claude_bin": "",
     # Friendly names for the dock/web, matched as a lowercased substring of a

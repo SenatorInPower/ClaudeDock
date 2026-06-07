@@ -7,6 +7,9 @@
   "web_url_secret": "",
   "web_host": "127.0.0.1",
   "web_port": 8765,
+  "web_password": "",
+
+  "_web_password_note": "Set this to log in and control sessions remotely WITHOUT Telegram (over HTTPS). Empty = off; the local PC (127.0.0.1) always has control.",
 
   "claude_bin": "",
 

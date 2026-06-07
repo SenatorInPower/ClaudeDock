@@ -43,6 +43,13 @@ ROOT = Path(__file__).parent
 MINIAPP = ROOT / "miniapp.html"
 
 CLAUDE = config.claude_bin()
+WEB_PASSWORD = config.get("web_password")   # optional: password login for remote control without Telegram
+
+
+def _session_value():
+    """Opaque session-cookie value derived from the password (no server-side state)."""
+    key = (WEB_PASSWORD or TOKEN).encode("utf-8")
+    return hmac.new(key, b"claudedock-auth-v1", hashlib.sha256).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -172,21 +179,23 @@ def run_resume_async(name: str, session_id: str, path, label: str, prompt: str, 
 # HTTP
 # ---------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
-    def _send(self, code, body, ctype="application/json; charset=utf-8"):
+    def _send(self, code, body, ctype="application/json; charset=utf-8", cookie=None):
         if isinstance(body, str):
             body = body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
         self.end_headers()
         try:
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def _json(self, obj, code=200):
-        self._send(code, json.dumps(obj, ensure_ascii=False))
+    def _json(self, obj, code=200, cookie=None):
+        self._send(code, json.dumps(obj, ensure_ascii=False), cookie=cookie)
 
     def _is_local(self):
         """Did this request originate on the host itself (not via the tunnel)?
@@ -200,6 +209,26 @@ class Handler(BaseHTTPRequestHandler):
         fwd = any(self.headers.get(h) for h in
                   ("X-Forwarded-For", "X-Real-IP", "X-Forwarded-Host", "X-Forwarded-Proto"))
         return host in ("127.0.0.1", "localhost", "::1") and not fwd
+
+    def _cookies(self):
+        out = {}
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                out[k.strip()] = v.strip()
+        return out
+
+    def _has_session(self):
+        """Valid password cookie? (set by POST /api/login)."""
+        if not WEB_PASSWORD:
+            return False
+        return hmac.compare_digest(self._cookies().get("cd_session", ""), _session_value())
+
+    def _authed(self, user=None):
+        """May this request CONTROL sessions? loopback OR Telegram-owner OR password cookie."""
+        return (self._is_local()
+                or bool(user and OWNER_ID and user.get("id") == OWNER_ID)
+                or self._has_session())
 
     def do_GET(self):
         path = urlparse(self.path).path
@@ -223,13 +252,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"projects": recent_projects()})
             except Exception as e:
                 self._json({"error": str(e)}, 500)
+        elif sub == "/api/auth":
+            # can THIS request control? (loopback / password cookie). Telegram is
+            # checked client-side via initData. password_enabled tells the UI to
+            # offer a login button.
+            self._json({"control": self._authed(), "password_enabled": bool(WEB_PASSWORD)})
         else:
             self._send(404, "not found", "text/plain")
 
     def do_POST(self):
         path = urlparse(self.path).path
         sub = path[len(BASE):].rstrip("/") if path.startswith(BASE) else ""
-        if sub not in ("/api/run", "/api/chat", "/api/seen"):
+        if sub not in ("/api/run", "/api/chat", "/api/seen", "/api/login"):
             self._send(404, "not found", "text/plain")
             return
         try:
@@ -238,10 +272,18 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self._json({"ok": False, "error": "bad request"}, 400)
             return
+        if sub == "/api/login":
+            pw = data.get("password") or ""
+            if WEB_PASSWORD and hmac.compare_digest(pw, WEB_PASSWORD):
+                cookie = (f"cd_session={_session_value()}; Path={BASE}; Max-Age=604800; "
+                          "HttpOnly; SameSite=Lax")
+                return self._json({"ok": True}, cookie=cookie)
+            return self._json({"ok": False, "error": ("неверный пароль" if WEB_PASSWORD
+                               else "пароль не настроен (web_password в config.json)")}, 403)
         user = verify_init_data(data.get("initData", ""))
-        if not (self._is_local() or (user and user.get("id") == OWNER_ID)):
+        if not self._authed(user):
             self._json({"ok": False,
-                        "error": "не авторизовано (открой из Telegram, либо прямо на ПК: http://127.0.0.1:8765)"}, 403)
+                        "error": "не авторизовано — войди по паролю, открой из Telegram, или прямо с ПК"}, 403)
             return
         if sub == "/api/seen":
             # пометить ответ сессии просмотренным — снимает «новый ответ» в UI

@@ -125,7 +125,7 @@ textarea{width:100%;min-height:96px;background:var(--card);border:1px solid var(
 </div>
 
 <div id="view-run" class="hidden">
-  <div id="run-warn" class="warn hidden">Управление доступно из Telegram (нужна подпись) или прямо на ПК (127.0.0.1:8765). Просмотр работает везде.</div>
+  <div id="run-warn" class="warn hidden">Управление: из Telegram, прямо с ПК (127.0.0.1), или <a href="#" onclick="login();return false" style="color:var(--orange);font-weight:700">🔓 войти по паролю</a>. Просмотр работает везде.</div>
   <div class="field">
     <label>Проект</label>
     <div class="chips" id="projects"></div>
@@ -165,7 +165,7 @@ if (tg){ try{ tg.ready(); tg.expand(); }catch(e){} }
 const initData = tg ? tg.initData : "";
 // Управление доступно из Telegram (подпись) ИЛИ когда страница открыта прямо на ПК.
 const isLocalHost = ['127.0.0.1','localhost','::1'].includes(location.hostname);
-const canControl = !!initData || isLocalHost;
+let canControl = !!initData || isLocalHost;
 let selProj = null, projects = [];
 const STLABEL = {run:'работает', wait:'ждёт', old:'закрыта'};
 
@@ -331,5 +331,20 @@ async function sheetAction(action){
   }catch(e){ t.className='toast err'; t.textContent='❌ сеть'; }
 }
 
-tick(); setInterval(tick,3000);
+async function refreshAuth(){
+  try{ const j=await (await fetch('./api/auth',{cache:'no-store'})).json();
+    if(j.control){ canControl=true; const w=document.getElementById('run-warn'); if(w) w.classList.add('hidden'); }
+  }catch(e){}
+}
+async function login(){
+  const p=prompt('Пароль для управления (web_password из config.json):'); if(!p) return;
+  try{
+    const j=await (await fetch('./api/login',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({password:p})})).json();
+    if(j.ok){ canControl=true; const w=document.getElementById('run-warn'); if(w) w.classList.add('hidden');
+      const t=document.getElementById('toast'); if(t){t.className='toast ok';t.style.display='block';t.textContent='✅ Вход выполнен — управление включено';} }
+    else { alert('❌ '+(j.error||'неверный пароль')); }
+  }catch(e){ alert('❌ сеть'); }
+}
+refreshAuth(); tick(); setInterval(tick,3000);
 </script></body></html>
