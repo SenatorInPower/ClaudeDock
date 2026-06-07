@@ -105,40 +105,40 @@ textarea{width:100%;min-height:96px;background:var(--card);border:1px solid var(
 .warn{background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.4);border-radius:12px;padding:10px 12px;font-size:13px;margin:10px 0;color:#e8c98a}
 </style></head>
 <body><div class="wrap">
-<h1><span class="dotlogo"></span> Claude Usage</h1>
-<div class="muted" id="sub">загрузка…</div>
+<h1 style="display:flex;align-items:center;gap:10px"><span class="dotlogo"></span> ClaudeDock <span class="langsel" style="margin-left:auto;font-size:12px;display:inline-flex;gap:3px;font-weight:700"><b data-l="en" onclick="setLang('en')" style="cursor:pointer;padding:3px 8px;border-radius:7px">EN</b><b data-l="ru" onclick="setLang('ru')" style="cursor:pointer;padding:3px 8px;border-radius:7px">RU</b><b data-l="uk" onclick="setLang('uk')" style="cursor:pointer;padding:3px 8px;border-radius:7px">UK</b></span></h1>
+<div class="muted" id="sub" data-i18n="loading">loading…</div>
 
 <div class="stats" id="stats"></div>
 
 <div class="tabs">
-  <div class="tab on" id="tab-agents" onclick="showTab('agents')">🤖 Агенты</div>
-  <div class="tab" id="tab-run" onclick="showTab('run')">🚀 Запуск</div>
+  <div class="tab on" id="tab-agents" onclick="showTab('agents')" data-i18n="agents">🤖 Agents</div>
+  <div class="tab" id="tab-run" onclick="showTab('run')" data-i18n="launch">🚀 Launch</div>
 </div>
 
 <div id="view-agents">
   <div class="legend">
-    <span><i style="background:var(--yellow)"></i>работает</span>
-    <span><i style="background:var(--blue)"></i>ждёт ввода — нажми, чтобы дописать</span>
-    <span><i style="background:#4a4640"></i>закрыта</span>
+    <span><i style="background:var(--yellow)"></i><span data-i18n="leg_working">working</span></span>
+    <span><i style="background:var(--blue)"></i><span data-i18n="leg_waiting">waiting — tap to continue</span></span>
+    <span><i style="background:#4a4640"></i><span data-i18n="leg_closed">closed</span></span>
   </div>
   <div id="list"></div>
 </div>
 
 <div id="view-run" class="hidden">
-  <div id="run-warn" class="warn hidden">Управление: из Telegram, прямо с ПК (127.0.0.1), или <a href="#" onclick="login();return false" style="color:var(--orange);font-weight:700">🔓 войти по паролю</a>. Просмотр работает везде.</div>
+  <div id="run-warn" class="warn hidden" data-i18n-html="run_warn">Control: from Telegram, on this PC (127.0.0.1), or <a href="#" onclick="login();return false" style="color:var(--orange);font-weight:700">🔓 log in</a>. Viewing works everywhere.</div>
   <div class="field">
-    <label>Проект</label>
+    <label data-i18n="project">Project</label>
     <div class="chips" id="projects"></div>
   </div>
   <div class="field">
-    <label>Задача (как в консоль сессии)</label>
-    <textarea id="task" placeholder="Напиши, что сделать…"></textarea>
+    <label data-i18n="task">Task (as typed into the session)</label>
+    <textarea id="task" data-i18n-ph="task_ph" placeholder="Describe what to do…"></textarea>
   </div>
   <div class="btns">
-    <button class="btn p" id="b-new" onclick="run('new_session')">▶ Новая сессия</button>
-    <button class="btn s" id="b-head" onclick="run('headless')">⚡ Headless</button>
+    <button class="btn p" id="b-new" onclick="run('new_session')" data-i18n="new_session">▶ New session</button>
+    <button class="btn s" id="b-head" onclick="run('headless')" data-i18n="headless">⚡ Headless</button>
   </div>
-  <div class="muted" style="margin-top:8px;font-size:12px;line-height:1.5">▶ если в проекте уже есть сессия «ждёт» — допишу задачу в неё; иначе откроется новое окно.<br>⚡ headless — разовый агент, закроется сам по завершении, ответ придёт в Telegram.</div>
+  <div class="muted" data-i18n-html="run_hint" style="margin-top:8px;font-size:12px;line-height:1.5">▶ if a session in the project is already waiting, your task is appended to it; otherwise a new window opens.<br>⚡ headless — a one-shot agent that closes itself; the answer comes to Telegram.</div>
   <div class="toast" id="toast"></div>
 </div>
 </div>
@@ -146,16 +146,16 @@ textarea{width:100%;min-height:96px;background:var(--card);border:1px solid var(
   <div class="sheet">
     <div class="sheet-h"><span id="sh-proj"></span><span id="sh-st" class="s-st"></span><span class="x" onclick="closeSheet()">✕</span></div>
     <div class="sheet-task" id="sh-task"></div>
-    <div class="hist-lbl">📜 История команд (последние 10)</div>
+    <div class="hist-lbl" data-i18n="hist">📜 Command history (last 10)</div>
     <div id="sh-hist" class="hist"></div>
-    <div id="sh-warn" class="warn hidden">Управление — только при открытии из Telegram или прямо на ПК (127.0.0.1:8765).</div>
+    <div id="sh-warn" class="warn hidden" data-i18n="sh_warn">Control only when opened from Telegram or on the PC (127.0.0.1:8765).</div>
     <div id="sh-chat" class="chat"></div>
     <div class="sheet-row">
       <button class="btn s" onclick="sheetAction('compact')">🗜 Compact</button>
       <button class="btn s" onclick="sheetAction('clear')">🧹 Clear</button>
     </div>
-    <textarea id="sh-prompt" placeholder="Напиши сессии — как мне сейчас (ответ придёт сюда)…"></textarea>
-    <button class="btn p" style="width:100%;margin-top:10px" onclick="sendChat()">▶ Отправить</button>
+    <textarea id="sh-prompt" data-i18n-ph="prompt_ph" placeholder="Message the session — like in the console (reply lands here)…"></textarea>
+    <button class="btn p" style="width:100%;margin-top:10px" onclick="sendChat()" data-i18n="send">▶ Send</button>
     <div class="toast" id="sh-toast"></div>
   </div>
 </div>
@@ -167,13 +167,67 @@ const initData = tg ? tg.initData : "";
 const isLocalHost = ['127.0.0.1','localhost','::1'].includes(location.hostname);
 let canControl = !!initData || isLocalHost;
 let selProj = null, projects = [];
-const STLABEL = {run:'работает', wait:'ждёт', old:'закрыта'};
+// ---- i18n (EN / RU / UK) ----
+const I18N={
+ en:{loading:'loading…',autoupd:'auto-updating',error:'error',agents:'🤖 Agents',launch:'🚀 Launch',
+  leg_working:'working',leg_waiting:'waiting — tap to continue',leg_closed:'closed',
+  project:'Project',task:'Task (as typed into the session)',task_ph:'Describe what to do…',
+  new_session:'▶ New session',headless:'⚡ Headless',
+  hist:'📜 Command history (last 10)',prompt_ph:'Message the session — like in the console (reply lands here)…',send:'▶ Send',
+  stat_wl:'working / live',stat_need:'need you',stat_today:'today',stat_total:'total (on disk)',stat_trend:'14-day trend',
+  st_run:'working',st_wait:'waiting',st_old:'closed',
+  aw_question:'choose options',aw_permission:'actions',aw_ask:'question',
+  no_sessions:'no sessions',last_reply:"agent's last reply",
+  now:'just now',min:'min',hr:'h',day:'d',
+  run_warn:'Control: from Telegram, on this PC (127.0.0.1), or <a href="#" onclick="login();return false" style="color:var(--orange);font-weight:700">🔓 log in</a>. Viewing works everywhere.',
+  run_hint:'▶ if a session in the project is already waiting, your task is appended to it; otherwise a new window opens.<br>⚡ headless — a one-shot agent that closes itself; the answer comes to Telegram.',
+  sh_warn:'Control only when opened from Telegram or on the PC (127.0.0.1:8765).',
+  pick_project:'Pick a project',write_task:'Write a task',ctl_note:'Control — from Telegram or on the PC',login_prompt:'Password to control:'},
+ ru:{loading:'загрузка…',autoupd:'обновляется само',error:'ошибка',agents:'🤖 Агенты',launch:'🚀 Запуск',
+  leg_working:'работает',leg_waiting:'ждёт ввода — нажми, чтобы дописать',leg_closed:'закрыта',
+  project:'Проект',task:'Задача (как в консоль сессии)',task_ph:'Напиши, что сделать…',
+  new_session:'▶ Новая сессия',headless:'⚡ Headless',
+  hist:'📜 История команд (последние 10)',prompt_ph:'Напиши сессии — как в консоль (ответ придёт сюда)…',send:'▶ Отправить',
+  stat_wl:'работают / живых',stat_need:'ждут решения',stat_today:'сегодня',stat_total:'всего (на диске)',stat_trend:'динамика 14 дней',
+  st_run:'работает',st_wait:'ждёт',st_old:'закрыта',
+  aw_question:'выбор пунктов',aw_permission:'действия',aw_ask:'вопрос',
+  no_sessions:'нет сессий',last_reply:'последний ответ агента',
+  now:'только что',min:'мин',hr:'ч',day:'дн',
+  run_warn:'Управление: из Telegram, прямо с ПК (127.0.0.1), или <a href="#" onclick="login();return false" style="color:var(--orange);font-weight:700">🔓 войти по паролю</a>. Просмотр работает везде.',
+  run_hint:'▶ если в проекте уже есть сессия «ждёт» — допишу задачу в неё; иначе откроется новое окно.<br>⚡ headless — разовый агент, закроется сам, ответ придёт в Telegram.',
+  sh_warn:'Управление — только из Telegram или прямо на ПК (127.0.0.1:8765).',
+  pick_project:'Выбери проект',write_task:'Напиши задачу',ctl_note:'Управление — из Telegram или прямо на ПК',login_prompt:'Пароль для управления:'},
+ uk:{loading:'завантаження…',autoupd:'оновлюється само',error:'помилка',agents:'🤖 Агенти',launch:'🚀 Запуск',
+  leg_working:'працює',leg_waiting:'очікує — натисни, щоб дописати',leg_closed:'закрита',
+  project:'Проєкт',task:'Завдання (як у консоль сесії)',task_ph:'Опиши, що зробити…',
+  new_session:'▶ Нова сесія',headless:'⚡ Headless',
+  hist:'📜 Історія команд (останні 10)',prompt_ph:'Напиши сесії — як у консоль (відповідь прийде сюди)…',send:'▶ Надіслати',
+  stat_wl:'працюють / живих',stat_need:'чекають рішення',stat_today:'сьогодні',stat_total:'всього (на диску)',stat_trend:'динаміка 14 днів',
+  st_run:'працює',st_wait:'очікує',st_old:'закрита',
+  aw_question:'вибір пунктів',aw_permission:'дії',aw_ask:'питання',
+  no_sessions:'немає сесій',last_reply:'остання відповідь агента',
+  now:'щойно',min:'хв',hr:'год',day:'дн',
+  run_warn:'Керування: з Telegram, прямо з ПК (127.0.0.1), або <a href="#" onclick="login();return false" style="color:var(--orange);font-weight:700">🔓 увійти за паролем</a>. Перегляд працює всюди.',
+  run_hint:'▶ якщо в проєкті вже є сесія «очікує» — допишу завдання в неї; інакше відкриється нове вікно.<br>⚡ headless — разовий агент, закриється сам, відповідь прийде в Telegram.',
+  sh_warn:'Керування — лише з Telegram або прямо з ПК (127.0.0.1:8765).',
+  pick_project:'Обери проєкт',write_task:'Напиши завдання',ctl_note:'Керування — з Telegram або прямо з ПК',login_prompt:'Пароль для керування:'}
+};
+let LANG=localStorage.getItem('cd_lang')||'en';
+function t(k){return (I18N[LANG]&&I18N[LANG][k])||I18N.en[k]||k}
+function stLabel(st){return t(st==='run'?'st_run':st==='wait'?'st_wait':'st_old')}
+function applyI18n(){
+  document.querySelectorAll('[data-i18n]').forEach(e=>e.textContent=t(e.dataset.i18n));
+  document.querySelectorAll('[data-i18n-html]').forEach(e=>e.innerHTML=t(e.dataset.i18nHtml));
+  document.querySelectorAll('[data-i18n-ph]').forEach(e=>e.placeholder=t(e.dataset.i18nPh));
+  document.querySelectorAll('.langsel b').forEach(b=>{const a=b.dataset.l===LANG;b.style.background=a?'var(--orange)':'transparent';b.style.color=a?'#1b1410':'var(--dim)'});
+}
+function setLang(l){LANG=l;localStorage.setItem('cd_lang',l);applyI18n();try{tick();}catch(e){}}
 
 function ht(n){n=+n||0;if(n>=1e6)return (n/1e6).toFixed(2)+'M';if(n>=1e3)return (n/1e3).toFixed(1)+'k';return ''+Math.round(n)}
 function hc(u){u=+u||0;if(u>=100)return '$'+u.toFixed(0);if(u>=1)return '$'+u.toFixed(2);return '$'+u.toFixed(3)}
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function spark(v){const b='▁▂▃▄▅▆▇█';if(!v.length)return '';const m=Math.max(...v)||1;return v.map(x=>b[Math.min(7,Math.floor(x/m*7))]).join('')}
-function age(s){if(s<45)return 'только что';if(s<3600)return (s/60|0)+' мин';if(s<86400)return (s/3600|0)+' ч';return (s/86400|0)+' дн'}
+function age(s){if(s<45)return t('now');if(s<3600)return (s/60|0)+' '+t('min');if(s<86400)return (s/3600|0)+' '+t('hr');return (s/86400|0)+' '+t('day')}
 function hue(s){let h=0;for(const c of (s||'')) h=(h*31+c.charCodeAt(0))>>>0; return h%360}
 function splitEmoji(p){const m=(p||'').match(/^(\P{ASCII}+)\s*(.*)$/u);return m?[m[1],m[2]||m[1]]:['🤖',p||'?']}
 
@@ -187,16 +241,16 @@ function showTab(t){
 
 async function tick(){
   let d; try{ d=await (await fetch('./api/usage',{cache:'no-store'})).json(); }catch(e){ return; }
-  if(d.error){ document.getElementById('sub').textContent='ошибка: '+d.error; return; }
-  document.getElementById('sub').textContent = new Date().toLocaleTimeString() + ' · обновляется само';
+  if(d.error){ document.getElementById('sub').textContent=t('error')+': '+d.error; return; }
+  document.getElementById('sub').textContent = new Date().toLocaleTimeString() + ' · '+t('autoupd');
   const days=Object.keys(d.daily||{}).sort().slice(-14).map(k=>d.daily[k].tokens);
   const runN=d.sessions.filter(s=>s.status==='run').length;
   document.getElementById('stats').innerHTML =
-    st('<span style="color:var(--orange)">'+runN+'</span> / '+(d.live_count||0),'работают / живых') +
-    st(d.attention_count||0,'ждут решения') +
-    st(ht(d.today.tokens_total)+' <span style="font-size:13px">'+hc(d.today.cost_usd)+'</span>','сегодня') +
-    st(ht(d.totals.tokens_total)+' <span style="font-size:13px">'+hc(d.totals.cost_usd)+'</span>','всего (на диске)') +
-    '<div class="stat wide"><div class="l">динамика 14 дней</div><div class="spark">'+spark(days)+'</div></div>';
+    st('<span style="color:var(--orange)">'+runN+'</span> / '+(d.live_count||0),t('stat_wl')) +
+    st(d.attention_count||0,t('stat_need')) +
+    st(ht(d.today.tokens_total)+' <span style="font-size:13px">'+hc(d.today.cost_usd)+'</span>',t('stat_today')) +
+    st(ht(d.totals.tokens_total)+' <span style="font-size:13px">'+hc(d.totals.cost_usd)+'</span>',t('stat_total')) +
+    '<div class="stat wide"><div class="l">'+t('stat_trend')+'</div><div class="spark">'+spark(days)+'</div></div>';
   const mx=Math.max(1,...d.sessions.map(s=>s.tokens_total));
   // работающие (оранжевые) сверху, затем ждущие с вопросом/непрочитанным
   const order=d.sessions.slice().sort((a,b)=>{
@@ -205,7 +259,7 @@ async function tick(){
     return (a.awaiting?0:1)-(b.awaiting?0:1)||(a.unread?0:1)-(b.unread?0:1)||a.age_sec-b.age_sec;
   });
   window._sess=order;
-  const AWL={question:'❓ выбор пунктов',permission:'⚠ действия',ask:'❓ вопрос'};
+  const AWL={question:'❓ '+t('aw_question'),permission:'⚠ '+t('aw_permission'),ask:'❓ '+t('aw_ask')};
   document.getElementById('list').innerHTML = order.map(s=>{
     const [emo,nm]=splitEmoji(s.project); const w=Math.max(3,s.tokens_total/mx*100);
     const st=s.status||'old';
@@ -221,12 +275,12 @@ async function tick(){
         '<span class="s-age">'+age(s.age_sec)+'</span></div>'+
       '<div class="s-task">'+esc(s.title)+'</div>'+
       '<div class="bar"><i style="width:'+w+'%"></i></div>'+
-      '<div class="meta"><span class="s-st '+st+'">'+STLABEL[st]+'</span>'+
+      '<div class="meta"><span class="s-st '+st+'">'+stLabel(st)+'</span>'+
         '<span><b>'+ht(s.tokens_total)+'</b> ток</span><span>≈<b>'+hc(s.cost_usd)+'</b></span>'+
         '<span>'+esc(s.models.join('/'))+'</span><span>'+s.msg_count+' отв.</span></div>'+
       resp+
       '</div></div>';
-  }).join('') || '<div class="muted">нет сессий</div>';
+  }).join('') || '<div class="muted">'+t('no_sessions')+'</div>';
 }
 function st(n,l){return '<div class="stat"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'}
 
@@ -268,9 +322,9 @@ function openSheet(sid){
   const [emo,nm]=splitEmoji(s.project);
   document.getElementById('sh-proj').textContent=emo+' '+nm;
   const st=s.status||'old';
-  const AWL={question:'❓ ждёт ВЫБОРА пунктов',permission:'⚠ ждёт подтверждения действий',ask:'❓ задал вопрос'};
+  const AWL={question:'❓ '+t('aw_question'),permission:'⚠ '+t('aw_permission'),ask:'❓ '+t('aw_ask')};
   const stEl=document.getElementById('sh-st');
-  stEl.textContent=STLABEL[st]+(s.awaiting?(' · '+(AWL[s.awaiting]||'')):'');
+  stEl.textContent=stLabel(st)+(s.awaiting?(' · '+(AWL[s.awaiting]||'')):'');
   stEl.className='s-st '+st;
   document.getElementById('sh-task').textContent=s.title;
   const h=s.history||[];
@@ -279,8 +333,8 @@ function openSheet(sid){
     : '<div class="muted" style="font-size:12px;padding:2px">нет истории</div>';
   document.getElementById('sh-prompt').value='';
   document.getElementById('sh-chat').innerHTML = s.last_response
-    ? '<div class="msg a"><b>последний ответ агента</b><br>'+esc(s.last_response).replace(/\n/g,'<br>')+'</div>' : '';
-  const t=document.getElementById('sh-toast'); t.className='toast';
+    ? '<div class="msg a"><b>'+t('last_reply')+'</b><br>'+esc(s.last_response).replace(/\n/g,'<br>')+'</div>' : '';
+  const sht=document.getElementById('sh-toast'); sht.className='toast';
   document.getElementById('sh-warn').classList.toggle('hidden', canControl);
   document.getElementById('sheet').classList.add('on');
   // открыли карточку — отметить ответ просмотренным (снять «новый ответ»)
@@ -346,5 +400,5 @@ async function login(){
     else { alert('❌ '+(j.error||'неверный пароль')); }
   }catch(e){ alert('❌ сеть'); }
 }
-refreshAuth(); tick(); setInterval(tick,3000);
+applyI18n(); refreshAuth(); tick(); setInterval(tick,3000);
 </script></body></html>
