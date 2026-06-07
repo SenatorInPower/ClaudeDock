@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🟧🟦 ClaudeDock
+# ✳️ ClaudeDock
 
 ### See every [Claude Code](https://claude.com/claude-code) session at a glance — and never miss the one that needs you.
 

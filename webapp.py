@@ -44,6 +44,8 @@ MINIAPP = ROOT / "miniapp.html"
 
 CLAUDE = config.claude_bin()
 WEB_PASSWORD = config.get("web_password")   # optional: password login for remote control without Telegram
+WEB_TRUST_KEY = config.get("web_trust_key")  # a reverse proxy behind its OWN auth (e.g. nginx htpasswd) sends
+                                             # header X-ClaudeDock-Auth: <key> to vouch for the request -> control
 
 
 def _session_value():
@@ -225,8 +227,9 @@ class Handler(BaseHTTPRequestHandler):
         return hmac.compare_digest(self._cookies().get("cd_session", ""), _session_value())
 
     def _authed(self, user=None):
-        """May this request CONTROL sessions? loopback OR Telegram-owner OR password cookie."""
+        """May this request CONTROL? loopback OR trusted-proxy header OR Telegram-owner OR password cookie."""
         return (self._is_local()
+                or bool(WEB_TRUST_KEY and self.headers.get("X-ClaudeDock-Auth") == WEB_TRUST_KEY)
                 or bool(user and OWNER_ID and user.get("id") == OWNER_ID)
                 or self._has_session())
 

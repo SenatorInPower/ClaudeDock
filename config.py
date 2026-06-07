@@ -32,6 +32,10 @@ _DEFAULTS = {
     # Optional password to control sessions remotely WITHOUT Telegram. Empty =
     # off (remote control then needs Telegram; the local PC always works).
     "web_password": "",
+    # If a reverse proxy already gated the request (e.g. nginx Basic Auth), it can
+    # vouch for it by sending header `X-ClaudeDock-Auth: <web_trust_key>` -> control
+    # granted with no second in-app password. Keep this key secret.
+    "web_trust_key": "",
     # Path to the `claude` executable, only if it is not on your PATH.
     "claude_bin": "",
     # Friendly names for the dock/web, matched as a lowercased substring of a

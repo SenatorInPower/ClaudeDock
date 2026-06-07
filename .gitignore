@@ -3,6 +3,10 @@ config.json
 .env
 # your real watchdog holds an SSH key path + server IP — keep it local
 run_webapp.ps1
+# personal Promes report integration (not part of the public tool)
+promes.py
+report.py
+promes_notify.py
 
 # --- local runtime data (your sessions, prompts, cache — personal) ---
 data/
