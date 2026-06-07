@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Claude Usage</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{
+  --bg:#15130e; --card:#1f1c16; --card2:#272219; --line:#34302a;
+  --orange:#D97757; --amber:#E8A33D; --green:#7ec47e; --blue:#5eb4ff; --yellow:#f5c451;
+  --text:#f4f1ea; --dim:#9a948a;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text);
+  font-family:-apple-system,'Segoe UI',Roboto,system-ui,sans-serif;font-size:15px}
+.wrap{max-width:680px;margin:0 auto;padding:14px 14px calc(28px + env(safe-area-inset-bottom))}
+h1{font-size:18px;margin:2px 0 2px;display:flex;align-items:center;gap:8px}
+h1 .dotlogo{width:22px;height:22px;border-radius:7px;background:linear-gradient(135deg,var(--orange),var(--amber));display:inline-block}
+.muted{color:var(--dim);font-size:12px}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:10px 12px}
+.stat .n{font-size:19px;font-weight:700}
+.stat .l{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+.stat.wide{grid-column:1/-1}
+.spark{font-family:ui-monospace,Consolas,monospace;font-size:17px;letter-spacing:1px;color:var(--amber)}
+.tabs{display:flex;gap:8px;margin:6px 0 12px}
+.tab{flex:1;text-align:center;padding:9px;border-radius:11px;background:var(--card);
+  border:1px solid var(--line);color:var(--dim);font-weight:600;cursor:pointer}
+.tab.on{background:var(--card2);color:var(--text);border-color:var(--orange)}
+.sess{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:11px 12px;margin-bottom:9px;display:flex;gap:11px;align-items:flex-start}
+/* статусы: run=жёлтый(работает) · wait=синий(ждёт ввода) · old=тускло(закрыта) */
+.sess.run{border-color:var(--yellow);background:var(--card2)}
+.sess.wait{border-color:rgba(94,180,255,.6);background:var(--card2)}
+.sess.old{opacity:.62}
+.ava{width:40px;height:40px;border-radius:12px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;font-size:20px;position:relative}
+.sess.run .ava::after{content:"";position:absolute;inset:-4px;border-radius:16px;border:2px solid var(--yellow);animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.25;transform:scale(1)}50%{opacity:.95;transform:scale(1.08)}}
+.s-st{font-size:11px;font-weight:700;padding:1px 7px;border-radius:7px;white-space:nowrap}
+.s-st.run{background:rgba(245,196,81,.16);color:var(--yellow)}
+.s-st.wait{background:rgba(94,180,255,.16);color:var(--blue)}
+.s-st.old{background:rgba(154,148,138,.14);color:var(--dim)}
+.legend{display:flex;gap:12px;flex-wrap:wrap;color:var(--dim);font-size:11px;margin:2px 2px 10px}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:middle}
+.s-main{flex:1;min-width:0}
+.s-top{display:flex;align-items:center;gap:7px}
+.s-proj{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s-age{margin-left:auto;color:var(--dim);font-size:12px;white-space:nowrap}
+.s-task{color:var(--dim);font-size:13px;margin:3px 0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar{height:6px;background:#100e0a;border-radius:4px;overflow:hidden;margin:3px 0 5px}
+.bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--orange),var(--amber))}
+.meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--dim);font-size:12px}
+.meta b{color:var(--text)}
+.dot{width:8px;height:8px;border-radius:50%;background:#4a4640;flex:0 0 auto}
+.sess.run .dot{background:var(--yellow);box-shadow:0 0 7px var(--yellow)}
+.sess.wait .dot{background:var(--blue);box-shadow:0 0 7px var(--blue)}
+.hist{margin:8px 0 4px;max-height:30vh;overflow-y:auto}
+.hist .h-row{display:flex;gap:8px;padding:5px 8px;border:1px solid var(--line);border-radius:9px;margin-bottom:5px;font-size:13px;cursor:pointer;align-items:baseline}
+.hist .h-row:hover{border-color:var(--orange)}
+.hist .h-n{color:var(--dim);font-size:11px;flex:0 0 auto;width:16px;text-align:right}
+.hist .h-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hist-lbl{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 4px}
+.sub{font-size:11px;color:var(--orange)}
+/* работает = оранжевый (по просьбе), ждёт = синий */
+.sess.run{border-color:var(--orange)}
+.sess.run .ava::after{border-color:var(--orange)}
+.sess.run .dot{background:var(--orange);box-shadow:0 0 7px var(--orange)}
+.s-st.run{background:rgba(245,166,35,.16);color:var(--orange)}
+/* ждёт ТВОЕГО решения + новый ответ */
+.sess.attn{box-shadow:0 0 0 1px rgba(245,166,35,.45)}
+.awb{font-size:10px;font-weight:700;padding:1px 6px;border-radius:7px;white-space:nowrap;margin-left:6px}
+.awb.question,.awb.ask{background:rgba(245,166,35,.22);color:#ffcf7a}
+.awb.permission{background:rgba(235,70,55,.22);color:#ff9b8f}
+.unread{position:absolute;top:-3px;right:-3px;width:11px;height:11px;border-radius:50%;background:#eb4034;border:2px solid var(--card2)}
+.s-resp{color:#b9b3a8;font-size:12px;line-height:1.4;margin-top:6px;padding:6px 8px;background:#13110d;border-radius:8px;border-left:2px solid var(--blue);max-height:46px;overflow:hidden}
+.s-resp.q{border-left-color:var(--orange);color:#e8d9b0}
+/* run */
+.field{margin:12px 0}
+.field label{display:block;color:var(--dim);font-size:12px;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+.chips{display:flex;gap:7px;overflow-x:auto;padding-bottom:4px;-webkit-overflow-scrolling:touch}
+.chip{flex:0 0 auto;padding:8px 12px;border-radius:11px;background:var(--card);border:1px solid var(--line);color:var(--text);font-size:13px;cursor:pointer;white-space:nowrap}
+.chip.on{background:var(--orange);border-color:var(--orange);color:#1b1410;font-weight:700}
+textarea{width:100%;min-height:96px;background:var(--card);border:1px solid var(--line);border-radius:13px;color:var(--text);padding:11px;font-size:15px;font-family:inherit;resize:vertical}
+.btns{display:flex;gap:9px;margin-top:11px}
+.btn{flex:1;padding:13px;border-radius:13px;border:none;font-size:15px;font-weight:700;cursor:pointer}
+.btn.p{background:linear-gradient(135deg,var(--orange),var(--amber));color:#1b1410}
+.btn.s{background:var(--card2);color:var(--text);border:1px solid var(--line)}
+.btn:disabled{opacity:.5}
+.toast{margin-top:12px;padding:11px 13px;border-radius:12px;font-size:14px;display:none}
+.toast.ok{display:block;background:rgba(126,196,126,.12);border:1px solid rgba(126,196,126,.5)}
+.toast.err{display:block;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.5)}
+.hidden{display:none}
+.sess{cursor:pointer}
+.sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-end;z-index:50}
+.sheet-bg.on{display:flex}
+.sheet{background:var(--card2);border-top:1px solid var(--line);border-radius:18px 18px 0 0;padding:16px 16px calc(18px + env(safe-area-inset-bottom));width:100%;max-width:680px;margin:0 auto}
+.sheet-h{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:700}
+.sheet-h .x{margin-left:auto;color:var(--dim);font-size:22px;cursor:pointer;padding:0 6px}
+.sheet-task{margin:6px 0 12px;font-size:13px;color:var(--dim)}
+.sheet-row{display:flex;gap:9px;margin-bottom:11px}
+.chat{max-height:40vh;overflow-y:auto;margin:8px 0;display:flex;flex-direction:column;gap:7px}
+.msg{padding:8px 11px;border-radius:12px;font-size:14px;white-space:pre-wrap;word-break:break-word;max-width:92%;line-height:1.4}
+.msg.u{align-self:flex-end;background:var(--orange);color:#1b1410}
+.msg.a{align-self:flex-start;background:var(--card);border:1px solid var(--line)}
+.msg.sys{align-self:center;color:var(--dim);font-size:12px;background:none;padding:2px}
+.warn{background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.4);border-radius:12px;padding:10px 12px;font-size:13px;margin:10px 0;color:#e8c98a}
+</style></head>
+<body><div class="wrap">
+<h1><span class="dotlogo"></span> Claude Usage</h1>
+<div class="muted" id="sub">загрузка…</div>
+
+<div class="stats" id="stats"></div>
+
+<div class="tabs">
+  <div class="tab on" id="tab-agents" onclick="showTab('agents')">🤖 Агенты</div>
+  <div class="tab" id="tab-run" onclick="showTab('run')">🚀 Запуск</div>
+</div>
+
+<div id="view-agents">
+  <div class="legend">
+    <span><i style="background:var(--yellow)"></i>работает</span>
+    <span><i style="background:var(--blue)"></i>ждёт ввода — нажми, чтобы дописать</span>
+    <span><i style="background:#4a4640"></i>закрыта</span>
+  </div>
+  <div id="list"></div>
+</div>
+
+<div id="view-run" class="hidden">
+  <div id="run-warn" class="warn hidden">Управление доступно из Telegram (нужна подпись) или прямо на ПК (127.0.0.1:8765). Просмотр работает везде.</div>
+  <div class="field">
+    <label>Проект</label>
+    <div class="chips" id="projects"></div>
+  </div>
+  <div class="field">
+    <label>Задача (как в консоль сессии)</label>
+    <textarea id="task" placeholder="Напиши, что сделать…"></textarea>
+  </div>
+  <div class="btns">
+    <button class="btn p" id="b-new" onclick="run('new_session')">▶ Новая сессия</button>
+    <button class="btn s" id="b-head" onclick="run('headless')">⚡ Headless</button>
+  </div>
+  <div class="muted" style="margin-top:8px;font-size:12px;line-height:1.5">▶ если в проекте уже есть сессия «ждёт» — допишу задачу в неё; иначе откроется новое окно.<br>⚡ headless — разовый агент, закроется сам по завершении, ответ придёт в Telegram.</div>
+  <div class="toast" id="toast"></div>
+</div>
+</div>
+<div class="sheet-bg" id="sheet" onclick="if(event.target===this)closeSheet()">
+  <div class="sheet">
+    <div class="sheet-h"><span id="sh-proj"></span><span id="sh-st" class="s-st"></span><span class="x" onclick="closeSheet()">✕</span></div>
+    <div class="sheet-task" id="sh-task"></div>
+    <div class="hist-lbl">📜 История команд (последние 10)</div>
+    <div id="sh-hist" class="hist"></div>
+    <div id="sh-warn" class="warn hidden">Управление — только при открытии из Telegram или прямо на ПК (127.0.0.1:8765).</div>
+    <div id="sh-chat" class="chat"></div>
+    <div class="sheet-row">
+      <button class="btn s" onclick="sheetAction('compact')">🗜 Compact</button>
+      <button class="btn s" onclick="sheetAction('clear')">🧹 Clear</button>
+    </div>
+    <textarea id="sh-prompt" placeholder="Напиши сессии — как мне сейчас (ответ придёт сюда)…"></textarea>
+    <button class="btn p" style="width:100%;margin-top:10px" onclick="sendChat()">▶ Отправить</button>
+    <div class="toast" id="sh-toast"></div>
+  </div>
+</div>
+<script>
+const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+if (tg){ try{ tg.ready(); tg.expand(); }catch(e){} }
+const initData = tg ? tg.initData : "";
+// Управление доступно из Telegram (подпись) ИЛИ когда страница открыта прямо на ПК.
+const isLocalHost = ['127.0.0.1','localhost','::1'].includes(location.hostname);
+const canControl = !!initData || isLocalHost;
+let selProj = null, projects = [];
+const STLABEL = {run:'работает', wait:'ждёт', old:'закрыта'};
+
+function ht(n){n=+n||0;if(n>=1e6)return (n/1e6).toFixed(2)+'M';if(n>=1e3)return (n/1e3).toFixed(1)+'k';return ''+Math.round(n)}
+function hc(u){u=+u||0;if(u>=100)return '$'+u.toFixed(0);if(u>=1)return '$'+u.toFixed(2);return '$'+u.toFixed(3)}
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+function spark(v){const b='▁▂▃▄▅▆▇█';if(!v.length)return '';const m=Math.max(...v)||1;return v.map(x=>b[Math.min(7,Math.floor(x/m*7))]).join('')}
+function age(s){if(s<45)return 'только что';if(s<3600)return (s/60|0)+' мин';if(s<86400)return (s/3600|0)+' ч';return (s/86400|0)+' дн'}
+function hue(s){let h=0;for(const c of (s||'')) h=(h*31+c.charCodeAt(0))>>>0; return h%360}
+function splitEmoji(p){const m=(p||'').match(/^(\P{ASCII}+)\s*(.*)$/u);return m?[m[1],m[2]||m[1]]:['🤖',p||'?']}
+
+function showTab(t){
+  document.getElementById('view-agents').classList.toggle('hidden',t!=='agents');
+  document.getElementById('view-run').classList.toggle('hidden',t!=='run');
+  document.getElementById('tab-agents').classList.toggle('on',t==='agents');
+  document.getElementById('tab-run').classList.toggle('on',t==='run');
+  if(t==='run' && !projects.length) loadProjects();
+}
+
+async function tick(){
+  let d; try{ d=await (await fetch('./api/usage',{cache:'no-store'})).json(); }catch(e){ return; }
+  if(d.error){ document.getElementById('sub').textContent='ошибка: '+d.error; return; }
+  document.getElementById('sub').textContent = new Date().toLocaleTimeString() + ' · обновляется само';
+  const days=Object.keys(d.daily||{}).sort().slice(-14).map(k=>d.daily[k].tokens);
+  const runN=d.sessions.filter(s=>s.status==='run').length;
+  document.getElementById('stats').innerHTML =
+    st('<span style="color:var(--orange)">'+runN+'</span> / '+(d.live_count||0),'работают / живых') +
+    st(d.attention_count||0,'ждут решения') +
+    st(ht(d.today.tokens_total)+' <span style="font-size:13px">'+hc(d.today.cost_usd)+'</span>','сегодня') +
+    st(ht(d.totals.tokens_total)+' <span style="font-size:13px">'+hc(d.totals.cost_usd)+'</span>','всего (на диске)') +
+    '<div class="stat wide"><div class="l">динамика 14 дней</div><div class="spark">'+spark(days)+'</div></div>';
+  const mx=Math.max(1,...d.sessions.map(s=>s.tokens_total));
+  // работающие (оранжевые) сверху, затем ждущие с вопросом/непрочитанным
+  const order=d.sessions.slice().sort((a,b)=>{
+    const r=x=>x.status==='run'?0:x.status==='wait'?1:2;
+    if(r(a)!==r(b))return r(a)-r(b);
+    return (a.awaiting?0:1)-(b.awaiting?0:1)||(a.unread?0:1)-(b.unread?0:1)||a.age_sec-b.age_sec;
+  });
+  window._sess=order;
+  const AWL={question:'❓ выбор пунктов',permission:'⚠ действия',ask:'❓ вопрос'};
+  document.getElementById('list').innerHTML = order.map(s=>{
+    const [emo,nm]=splitEmoji(s.project); const w=Math.max(3,s.tokens_total/mx*100);
+    const st=s.status||'old';
+    const attn=((s.awaiting||s.unread)&&st!=='old')?' attn':'';
+    const awb=s.awaiting?'<span class="awb '+s.awaiting+'">'+(AWL[s.awaiting]||'')+'</span>':'';
+    const unread=s.unread?'<span class="unread"></span>':'';
+    const resp=s.last_response?'<div class="s-resp'+(s.awaiting==='question'?' q':'')+'">'+esc(s.last_response.slice(0,200))+'</div>':'';
+    return '<div class="sess '+st+attn+'" onclick="openSheet(\''+s.session_id+'\')">'+
+      '<div class="ava" style="background:hsl('+hue(s.project)+' 45% 30%)">'+esc(emo)+unread+'</div>'+
+      '<div class="s-main"><div class="s-top"><span class="dot"></span>'+
+        '<span class="s-proj">'+esc(nm)+'</span>'+awb+
+        (s.subagents?'<span class="sub">+'+s.subagents+'</span>':'')+
+        '<span class="s-age">'+age(s.age_sec)+'</span></div>'+
+      '<div class="s-task">'+esc(s.title)+'</div>'+
+      '<div class="bar"><i style="width:'+w+'%"></i></div>'+
+      '<div class="meta"><span class="s-st '+st+'">'+STLABEL[st]+'</span>'+
+        '<span><b>'+ht(s.tokens_total)+'</b> ток</span><span>≈<b>'+hc(s.cost_usd)+'</b></span>'+
+        '<span>'+esc(s.models.join('/'))+'</span><span>'+s.msg_count+' отв.</span></div>'+
+      resp+
+      '</div></div>';
+  }).join('') || '<div class="muted">нет сессий</div>';
+}
+function st(n,l){return '<div class="stat"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'}
+
+async function loadProjects(){
+  if(!canControl){ document.getElementById('run-warn').classList.remove('hidden'); }
+  try{
+    const d=await (await fetch('./api/projects',{cache:'no-store'})).json();
+    projects=d.projects||[];
+  }catch(e){ projects=[]; }
+  const box=document.getElementById('projects');
+  box.innerHTML=projects.map((p,i)=>'<div class="chip" data-i="'+i+'" onclick="pick('+i+')">'+esc(splitEmoji(p.name)[0])+' '+esc(splitEmoji(p.name)[1])+'</div>').join('') || '<span class="muted">нет проектов</span>';
+}
+function pick(i){
+  selProj=projects[i];
+  document.querySelectorAll('.chip').forEach((c,j)=>c.classList.toggle('on',j===i));
+}
+async function run(action){
+  const task=document.getElementById('task').value.trim();
+  const toast=document.getElementById('toast');
+  if(!selProj){ toast.className='toast err'; toast.textContent='Выбери проект'; return; }
+  if(!task){ toast.className='toast err'; toast.textContent='Напиши задачу'; return; }
+  if(!canControl){ toast.className='toast err'; toast.textContent='Управление — из Telegram или прямо на ПК (127.0.0.1:8765)'; return; }
+  document.getElementById('b-new').disabled=true; document.getElementById('b-head').disabled=true;
+  toast.className='toast'; toast.style.display='block'; toast.textContent='Запускаю…';
+  try{
+    if(tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    const r=await fetch('./api/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({initData,action,path:selProj.path,name:selProj.name,task})});
+    const j=await r.json();
+    if(j.ok){ toast.className='toast ok'; toast.textContent='✅ '+(j.msg||'Готово'); document.getElementById('task').value=''; }
+    else { toast.className='toast err'; toast.textContent='❌ '+(j.error||'ошибка'); }
+  }catch(e){ toast.className='toast err'; toast.textContent='❌ сеть: '+e; }
+  document.getElementById('b-new').disabled=false; document.getElementById('b-head').disabled=false;
+}
+
+function openSheet(sid){
+  const s=(window._sess||[]).find(x=>x.session_id===sid); if(!s)return;
+  window._cur=s;
+  const [emo,nm]=splitEmoji(s.project);
+  document.getElementById('sh-proj').textContent=emo+' '+nm;
+  const st=s.status||'old';
+  const AWL={question:'❓ ждёт ВЫБОРА пунктов',permission:'⚠ ждёт подтверждения действий',ask:'❓ задал вопрос'};
+  const stEl=document.getElementById('sh-st');
+  stEl.textContent=STLABEL[st]+(s.awaiting?(' · '+(AWL[s.awaiting]||'')):'');
+  stEl.className='s-st '+st;
+  document.getElementById('sh-task').textContent=s.title;
+  const h=s.history||[];
+  document.getElementById('sh-hist').innerHTML = h.length
+    ? h.slice().reverse().map((x,i)=>'<div class="h-row" onclick="useHist('+(h.length-1-i)+')"><span class="h-n">'+(h.length-i)+'</span><span class="h-t">'+esc(x.title)+'</span></div>').join('')
+    : '<div class="muted" style="font-size:12px;padding:2px">нет истории</div>';
+  document.getElementById('sh-prompt').value='';
+  document.getElementById('sh-chat').innerHTML = s.last_response
+    ? '<div class="msg a"><b>последний ответ агента</b><br>'+esc(s.last_response).replace(/\n/g,'<br>')+'</div>' : '';
+  const t=document.getElementById('sh-toast'); t.className='toast';
+  document.getElementById('sh-warn').classList.toggle('hidden', canControl);
+  document.getElementById('sheet').classList.add('on');
+  // открыли карточку — отметить ответ просмотренным (снять «новый ответ»)
+  if(s.unread){ fetch('./api/seen',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({initData,session_id:sid})}).catch(()=>{}); s.unread=false; }
+  if(tg&&tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+}
+function useHist(i){
+  const s=window._cur; if(!s||!s.history||!s.history[i])return;
+  const ta=document.getElementById('sh-prompt'); ta.value=s.history[i].title; ta.focus();
+}
+function addMsg(cls, text){
+  const chat=document.getElementById('sh-chat');
+  const d=document.createElement('div'); d.className='msg '+cls; d.textContent=text;
+  chat.appendChild(d); chat.scrollTop=chat.scrollHeight; return d;
+}
+async function sendChat(){
+  const s=window._cur; if(!s)return;
+  const ta=document.getElementById('sh-prompt'); const prompt=ta.value.trim();
+  if(!canControl){ addMsg('sys','Управление — из Telegram или прямо на ПК (127.0.0.1:8765)'); return; }
+  if(!prompt){ return; }
+  addMsg('u', prompt); ta.value='';
+  const wait=addMsg('a','…');
+  if(tg&&tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+  try{
+    const r=await fetch('./api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({initData,session_id:s.session_id,path:s.project_path,prompt})});
+    const j=await r.json();
+    wait.textContent = j.ok ? (j.response||'(пусто)') : ('❌ '+(j.error||'ошибка'));
+  }catch(e){ wait.textContent='❌ сеть/таймаут (длинный ответ может прийти позже)'; }
+}
+function closeSheet(){ document.getElementById('sheet').classList.remove('on'); }
+async function sheetAction(action){
+  const s=window._cur; if(!s)return;
+  const t=document.getElementById('sh-toast');
+  if(!canControl){ t.className='toast err'; t.textContent='Управление — из Telegram или прямо на ПК'; return; }
+  let task='';
+  if(action==='continue'){ task=document.getElementById('sh-prompt').value.trim();
+    if(!task){ t.className='toast err'; t.textContent='Напиши промт'; return; } }
+  t.className='toast'; t.style.display='block'; t.textContent='Отправляю…';
+  try{
+    if(tg&&tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    const r=await fetch('./api/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({initData,action,session_id:s.session_id,path:s.project_path,name:splitEmoji(s.project)[1],task})});
+    const j=await r.json();
+    if(j.ok){ t.className='toast ok'; t.textContent='✅ '+(j.msg||'ок'); document.getElementById('sh-prompt').value=''; }
+    else{ t.className='toast err'; t.textContent='❌ '+(j.error||'ошибка'); }
+  }catch(e){ t.className='toast err'; t.textContent='❌ сеть'; }
+}
+
+tick(); setInterval(tick,3000);
+</script></body></html>

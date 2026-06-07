@@ -1,0 +1,39 @@
+# --- secrets & local config (NEVER commit) ---
+config.json
+.env
+# your real watchdog holds an SSH key path + server IP — keep it local
+run_webapp.ps1
+
+# --- local runtime data (your sessions, prompts, cache — personal) ---
+data/
+seen.json
+
+# --- custom avatars you drop in (keep the folder, ignore the images) ---
+avatars/*
+!avatars/.gitkeep
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# --- editor / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- author's personal working files (not for the public repo) ---
+CLAUDE.md
+docs_knowledge_page.html
+dashboard.py
+Запустить-док.bat
+Запустить-дашборд.bat
+Сводка-в-Telegram.bat
+
+# --- scratch / generated ---
+*.bak
+*.tmp
+_*.md

@@ -1,0 +1,23 @@
+{
+  "_comment": "Copy this file to config.json and fill in what you need. Everything is optional — with an empty config the local desktop dock works fully. config.json is git-ignored, so your secrets never get committed.",
+
+  "telegram_bot_token": "",
+  "telegram_chat_id": "",
+
+  "web_url_secret": "",
+  "web_host": "127.0.0.1",
+  "web_port": 8765,
+
+  "claude_bin": "",
+
+  "project_names": [
+    ["myorg/backend", "🛠 Backend"],
+    ["myorg/web-app", "🌐 Web App"],
+    ["experiments", "🧪 Experiments"]
+  ],
+
+  "launch_projects": [
+    { "name": "Backend",  "path": "C:/code/myorg/backend" },
+    { "name": "Web App",  "path": "C:/code/myorg/web-app" }
+  ]
+}

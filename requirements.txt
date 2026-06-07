@@ -1,0 +1,5 @@
+# ClaudeDock dependencies (Python 3.9+)
+Pillow>=10.0      # desktop dock rendering (dock.py). Not needed for web/CLI only.
+requests>=2.28    # Telegram push (tg.py / alerts.py). Optional feature.
+# The web controller (webapp.py) and the core (claude_usage.py) use only the
+# Python standard library — no extra packages required.
