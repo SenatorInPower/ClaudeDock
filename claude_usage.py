@@ -470,32 +470,31 @@ def _save_json(path: Path, obj):
 # config ("claude_bin") if claude is not on PATH.
 _CLAUDE_BIN = config.claude_bin()
 
-# Кэш списка живых агентов: вызов claude стоит ~1.5с и плодит процесс, поэтому
-# держим результат ttl секунд. fetched=True кэширует и неудачу (не долбим claude).
-_agents_cache = {"ts": 0.0, "data": None, "fetched": False}
+# Кэш списка живых агентов. ВАЖНО: на загруженном ПК `claude agents --json` может
+# отвечать 20-30с (раньше было ~1.5с). Поэтому опрос делается в ФОНОВОМ потоке, а
+# live_agents() мгновенно отдаёт последний известный снимок и НИКОГДА не блокирует
+# scan() (иначе вся вьюха висла бы по 30с). fetched=True — снимок хоть раз получен.
+_agents_cache = {"ts": 0.0, "data": None, "fetched": False, "fetching": False,
+                 "last_good": None, "last_good_ts": 0.0}
+_agents_lock = __import__("threading").Lock()
+# Таймаут на сам вызов claude (он бывает медленным) и окно, в течение которого
+# переиспользуем последний удачный снимок, если свежий опрос не готов/упал.
+AGENTS_TIMEOUT = 30
+AGENTS_HOLD_SEC = 150
+# Общий на диске снимок живых агентов: dock и webapp — РАЗНЫЕ процессы, каждый
+# опрашивал claude по своему таймеру, поэтому их счётчики «живых» разъезжались.
+# Кто опросил последним — пишет сюда; другой берёт свежий снимок отсюда и не
+# дёргает claude лишний раз. Так обе вьюхи показывают одно и то же.
+AGENTS_FILE = DATA_DIR / "agents_cache.json"
 
 
-def live_agents(ttl: float = 5.0):
-    """Карта живых интерактивных сессий Claude Code или None.
-
-    `claude agents --json` перечисляет процессы с ОТКРЫТЫМ окном (kind=interactive)
-    и состоянием: busy=агент работает, idle=ждёт ввода. Это единственный надёжный
-    признак «терминал ещё открыт» — по транскрипту этого не понять (ответ end_turn
-    час назад выглядит одинаково и у открытого окна, и у закрытого).
-
-    Возвращает {session_id: {status, pid, cwd, kind, startedAt}} либо None, если
-    claude недоступен/команда упала (тогда статус оценивается по транскрипту).
-    """
-    now = time.time()
-    c = _agents_cache
-    if c["fetched"] and (now - c["ts"]) < ttl:
-        return c["data"]
-    result = None
+def _fetch_agents():
+    """Один синхронный вызов `claude agents --json` -> карта {sid:{...}} или None."""
     try:
         r = subprocess.run(
             [_CLAUDE_BIN, "agents", "--json"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=8, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            timeout=AGENTS_TIMEOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if r.returncode == 0 and (r.stdout or "").strip():
             data = json.loads(r.stdout)
             mp = {}
@@ -507,20 +506,79 @@ def live_agents(ttl: float = 5.0):
                                    "pid": a.get("pid"), "cwd": a.get("cwd") or "",
                                    "kind": a.get("kind") or "",
                                    "startedAt": a.get("startedAt")}
-            result = mp
+            return mp
     except (OSError, ValueError, subprocess.SubprocessError):
-        result = None
-    if result is None:
-        # `claude agents` не ответил (таймаут/сбой) — переиспользуем последний
-        # успешный снимок (≤30с), чтобы счётчик живых сессий не «прыгал» из-за
-        # разовых сбоев команды (это и есть «то много агентов, то резко мало»).
-        lg, lg_ts = c.get("last_good"), c.get("last_good_ts", 0.0)
-        if lg is not None and (now - lg_ts) < 30:
-            result = lg
-    else:
-        c["last_good"], c["last_good_ts"] = result, now
-    c["ts"], c["data"], c["fetched"] = now, result, True
-    return result
+        return None
+    return None
+
+
+def _refresh_agents_bg():
+    """Фоновое обновление снимка живых агентов (claude бывает медленным, до 30с)."""
+    result = _fetch_agents()
+    now = time.time()
+    with _agents_lock:
+        _agents_cache["fetching"] = False
+        if result is not None:
+            _agents_cache.update(ts=now, data=result, fetched=True,
+                                 last_good=result, last_good_ts=now)
+    if result is not None:
+        try:  # поделиться снимком с другими процессами (dock/webapp)
+            _save_json(AGENTS_FILE, {"ts": now, "agents": result})
+        except OSError:
+            pass
+
+
+def live_agents(ttl: float = 8.0, block_if_empty: bool = True):
+    """Карта живых интерактивных сессий Claude Code или None — НЕ блокирует.
+
+    `claude agents --json` перечисляет процессы с ОТКРЫТЫМ окном (kind=interactive)
+    и состоянием: busy=работает, idle=ждёт ввода. Это единственный надёжный признак
+    «терминал ещё открыт» — по транскрипту не отличить открытое окно от закрытого.
+
+    Опрос claude вынесен в фоновый поток (он может длиться 20-30с на нагруженном
+    ПК). Здесь мгновенно отдаём последний снимок: свежий из памяти/диска, иначе —
+    последний удачный (в пределах AGENTS_HOLD_SEC), и запускаем фоновое обновление.
+    block_if_empty=True: на ХОЛОДНОМ старте (снимка ещё нет нигде) делаем один
+    синхронный опрос, чтобы CLI и первый scan сразу получили правду.
+    """
+    now = time.time()
+    c = _agents_cache
+    if c["fetched"] and c["data"] is not None and (now - c["ts"]) < ttl:
+        return c["data"]
+    # Свежий общий снимок с диска (записан другим процессом) — синхронизирует вьюхи.
+    disk = _load_json(AGENTS_FILE, None)
+    if isinstance(disk, dict) and disk.get("agents") is not None and (now - disk.get("ts", 0)) < ttl:
+        with _agents_lock:
+            c["ts"], c["data"], c["fetched"] = now, disk["agents"], True
+            c["last_good"], c["last_good_ts"] = disk["agents"], disk.get("ts", now)
+        return disk["agents"]
+
+    # Лучший известный снимок (память или диск) в пределах окна удержания.
+    best, best_ts = c.get("last_good"), c.get("last_good_ts", 0.0)
+    if isinstance(disk, dict) and disk.get("agents") is not None and disk.get("ts", 0) > best_ts:
+        best, best_ts = disk["agents"], disk["ts"]
+
+    # Холодный старт: снимка нет нигде — один синхронный опрос (CLI/первый scan).
+    if best is None and block_if_empty:
+        result = _fetch_agents()
+        if result is not None:
+            with _agents_lock:
+                _agents_cache.update(ts=now, data=result, fetched=True,
+                                     last_good=result, last_good_ts=now)
+            try:
+                _save_json(AGENTS_FILE, {"ts": now, "agents": result})
+            except OSError:
+                pass
+            return result
+
+    # Запустить фоновое обновление (если ещё не идёт) и отдать лучший снимок сейчас.
+    with _agents_lock:
+        if not c["fetching"]:
+            c["fetching"] = True
+            __import__("threading").Thread(target=_refresh_agents_bg, daemon=True).start()
+    if best is not None and (now - best_ts) < AGENTS_HOLD_SEC:
+        return best
+    return None
 
 
 # ----------------------------------------------------------------------------

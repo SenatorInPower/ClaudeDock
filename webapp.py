@@ -32,6 +32,7 @@ from urllib.parse import parse_qsl, urlparse
 sys.path.insert(0, str(Path(__file__).parent))
 import claude_usage as cu
 import config
+import terminal_inject
 from tg import send as tg_send, TOKEN as BOT_TOKEN, CHAT_ID
 
 TOKEN = config.web_url_secret()             # secret in the URL path (auto-generated)
@@ -133,6 +134,31 @@ def find_session(path: str, statuses):
             if s.get("project_path") == path and s.get("status") in statuses]
     cand.sort(key=lambda s: s.get("age_sec", 1e9))
     return cand[0] if cand else None
+
+
+def session_live_pid(sid: str):
+    """(pid, status) живой сессии по её id, или (None, None). PID есть только у
+    открытых окон (claude agents) — тогда можно ВПЕЧАТАТЬ ход прямо в терминал."""
+    if not sid:
+        return None, None
+    try:
+        snap = cu.scan()
+    except Exception:
+        return None, None
+    for s in snap["sessions"]:
+        if s.get("session_id") == sid:
+            return s.get("pid"), s.get("status")
+    return None, None
+
+
+def inject_live(sid: str, prompt: str):
+    """Попробовать впечатать ход в живой терминал сессии. (ok, message|None).
+    ok=None — сессия не живая (нет PID), нужно идти через resume."""
+    pid, status = session_live_pid(sid)
+    if not (pid and status in ("run", "wait")):
+        return None, None
+    ok, msg = terminal_inject.send_to_terminal(pid, prompt)
+    return ok, (pid, msg)
 
 
 def _claude_ps(cwd, mid: str, prompt: str, timeout: int = 1800) -> str:
@@ -303,6 +329,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "error": "пустой промт"}, 400)
             cwd = path_ if (path_ and os.path.isdir(path_)) else None
             try:
+                # Живая сессия (открытое окно) — впечатываем ход прямо в её терминал,
+                # ответ идёт В ТО ЖЕ окно. Иначе — headless resume с ответом сюда.
+                ok, info = inject_live(sid, prompt)
+                if ok is True:
+                    pid, _ = info
+                    return self._json({"ok": True, "injected": True,
+                        "response": ("✅ Впечатано в живой терминал сессии (PID %s). "
+                                     "Ответ появится в самом окне сессии — это та же "
+                                     "сессия, контекст сохранён." % pid)})
+                if ok is False:
+                    pid, msg = info
+                    return self._json({"ok": True, "injected": False,
+                        "response": "⚠ Не удалось впечатать в окно (%s). "
+                                    "Окно сессии закрыто? Попробуй ещё раз." % msg})
                 out = _claude_ps(cwd, f"--resume '{sid}'", prompt, timeout=110)
                 return self._json({"ok": True, "response": out})
             except Exception as e:
@@ -324,8 +364,16 @@ class Handler(BaseHTTPRequestHandler):
                     # задачу в неё (та же сессия), а не плодим новую (как и просил юзер).
                     waiting = find_session(cwd, ("wait",))
                     if waiting:
-                        run_resume_async(name, waiting["session_id"], cwd, "продолжение", task, True)
-                        self._json({"ok": True, "msg": f"«{name}» ждал ввода — дописал задачу в ту же сессию (…{waiting['session_id'][-6:]}). Ответ придёт в Telegram."})
+                        pid = waiting.get("pid")
+                        if pid:
+                            ok, msg = terminal_inject.send_to_terminal(pid, task)
+                            if ok:
+                                self._json({"ok": True, "msg": f"«{name}» ждал ввода — впечатал задачу прямо в его окно (PID {pid}). Ответ — в самом окне сессии."})
+                            else:
+                                self._json({"ok": False, "error": f"не удалось впечатать в окно ({msg})"}, 502)
+                        else:
+                            run_resume_async(name, waiting["session_id"], cwd, "продолжение", task, True)
+                            self._json({"ok": True, "msg": f"«{name}» ждал ввода — дописал задачу в ту же сессию (…{waiting['session_id'][-6:]}). Ответ придёт в Telegram."})
                     else:
                         sid = start_session(cwd, task, name)
                         self._json({"ok": True, "msg": f"Новая сессия в «{name}» — окно открыто на ПК (id …{sid[-6:]})."})
@@ -338,12 +386,23 @@ class Handler(BaseHTTPRequestHandler):
                 if action == "continue":
                     if not task:
                         return self._json({"ok": False, "error": "пустой промт"}, 400)
-                    run_resume_async(name, sid, cwd, "продолжение", task, True)
-                    self._json({"ok": True, "msg": f"Промт отправлен в сессию «{name}» — ответ придёт в Telegram."})
+                    prompt = task
                 else:
-                    cmd = "/compact" if action == "compact" else "/clear"
-                    run_resume_async(name, sid, cwd, action, cmd, False)
-                    self._json({"ok": True, "msg": f"{cmd} отправлен в «{name}» — результат придёт в Telegram."})
+                    prompt = "/compact" if action == "compact" else "/clear"
+                # Живая сессия — впечатываем прямо в окно (та же сессия, ответ там же).
+                ok, info = inject_live(sid, prompt)
+                if ok is True:
+                    pid, _ = info
+                    self._json({"ok": True, "msg": f"Впечатано в живой терминал «{name}» (PID {pid}) — ответ в самом окне сессии."})
+                elif ok is False:
+                    pid, msg = info
+                    self._json({"ok": False, "error": f"не удалось впечатать в окно ({msg}) — окно закрыто?"}, 502)
+                elif action == "continue":
+                    run_resume_async(name, sid, cwd, "продолжение", prompt, True)
+                    self._json({"ok": True, "msg": f"Сессия закрыта — отправил через resume в «{name}», ответ придёт в Telegram."})
+                else:
+                    run_resume_async(name, sid, cwd, action, prompt, False)
+                    self._json({"ok": True, "msg": f"Сессия закрыта — {prompt} через resume в «{name}», результат в Telegram."})
             else:
                 self._json({"ok": False, "error": "неизвестное действие"}, 400)
         except Exception as e:
@@ -360,11 +419,11 @@ def main():
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         import urllib.request
         u = f"http://{HOST}:{PORT}{BASE}/api/usage"
-        ok_usage = b"sessions" in urllib.request.urlopen(u, timeout=10).read()
+        ok_usage = b"sessions" in urllib.request.urlopen(u, timeout=40).read()
         p = f"http://{HOST}:{PORT}{BASE}/api/projects"
-        ok_proj = b"projects" in urllib.request.urlopen(p, timeout=10).read()
+        ok_proj = b"projects" in urllib.request.urlopen(p, timeout=40).read()
         h = f"http://{HOST}:{PORT}{BASE}/"
-        ok_html = b"Claude" in urllib.request.urlopen(h, timeout=10).read()
+        ok_html = b"Claude" in urllib.request.urlopen(h, timeout=40).read()
         # неавторизованный POST должен дать 403
         import urllib.error
         code = 0

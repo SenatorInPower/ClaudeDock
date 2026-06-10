@@ -31,6 +31,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageTk
 sys.path.insert(0, str(Path(__file__).parent))
 import claude_usage as cu
 import config
+import terminal_inject
 
 ROOT = Path(__file__).parent
 AVATARS = ROOT / "avatars"
@@ -48,6 +49,27 @@ AWAIT_LABEL = {"question": "❓ ждёт ВЫБОРА пунктов", "permissi
 
 def _ps_lit(s: str) -> str:
     return (s or "").replace("'", "''")
+
+
+def deliver(s: dict, prompt: str) -> str:
+    """Доставить ход в сессию. Живая (есть PID) — ВПЕЧАТАТЬ прямо в её терминал
+    (как будто набрал руками и нажал Enter): работа продолжается В ТОМ ЖЕ окне,
+    ответ виден там же. Закрытая — фолбэк на headless `claude -p --resume`."""
+    pid = s.get("pid")
+    sid = s.get("session_id")
+    path = s.get("project_path", "")
+    if pid and s.get("status") in ("run", "wait"):
+        ok, msg = terminal_inject.send_to_terminal(pid, prompt)
+        if ok:
+            return ("✅ Впечатано в ЖИВОЙ терминал сессии (PID %s).\n"
+                    "Ответ появится в САМОМ окне сессии — это та же сессия, "
+                    "контекст сохранён.\n\n(%s)" % (pid, msg))
+        # Сессия живая, но впечатать не вышло (например, окно VS Code/ConPTY).
+        # resume сюда НЕ делаем — это второй процесс на ту же сессию (конфликт
+        # записи транскрипта). Сообщаем, чтобы юзер набрал в окне руками.
+        return ("⚠ Не удалось впечатать в окно сессии (%s).\n"
+                "Окно живо, но ввод не принят — набери ход прямо в нём." % msg)
+    return drive_session(path, sid, prompt)
 
 
 def drive_session(path: str, sid: str, prompt: str, timeout: int = 900) -> str:
@@ -424,7 +446,10 @@ class Dock:
         lr = s.get("last_response")
         if lr:
             out.insert("end", "── последний ответ агента ──\n" + lr + "\n\n")
-        out.insert("end", "Ниже появится ответ на твой ход (это ТА ЖЕ сессия — контекст сохраняется).\n")
+        live = bool(s.get("pid") and s.get("status") in ("run", "wait"))
+        out.insert("end", ("Текст будет ВПЕЧАТАН прямо в окно сессии (как будто набрал и нажал Enter) — "
+                           "ответ появится в самом окне.\n" if live else
+                           "Сессия закрыта — отправлю через resume, ответ придёт сюда.\n"))
         out.configure(state="disabled")
         entry.pack(fill="x", padx=12)
         btnrow = tk.Frame(win, bg="#17150f")
@@ -441,7 +466,7 @@ class Dock:
             out.configure(state="disabled")
 
             def work():
-                resp = drive_session(path, sid, prompt)
+                resp = deliver(s, prompt)
 
                 def show():
                     out.configure(state="normal")
