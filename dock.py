@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import uuid
 from pathlib import Path
 
@@ -36,6 +37,18 @@ import terminal_inject
 ROOT = Path(__file__).parent
 AVATARS = ROOT / "avatars"
 CLAUDE_BIN = config.claude_bin()
+CRASH_LOG = ROOT / "data" / "dock_crash.log"
+
+
+def log_crash(where: str, ex: BaseException) -> None:
+    """Никогда не роняем док из-за фоновой ошибки — пишем трейс в файл и живём дальше."""
+    try:
+        CRASH_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(CRASH_LOG, "a", encoding="utf-8") as f:
+            f.write("\n=== %s @ %s ===\n" % (where, time.strftime("%Y-%m-%d %H:%M:%S")))
+            f.write("".join(traceback.format_exception(type(ex), ex, ex.__traceback__)))
+    except Exception:
+        pass
 
 # Цвета статуса (контроллер): run=работает(оранжевый), wait=ждёт(синий), old=закрыта.
 # Кольцо-обводка головы рисуется этим цветом — сразу видно кто работает, кто ждёт.
@@ -300,6 +313,10 @@ class Dock:
     def __init__(self, side="left"):
         self.side = side
         self.root = tk.Tk()
+        # Любое необработанное исключение в Tk-колбэке (клик/меню/after) логируем,
+        # а не роняем процесс — раньше такое могло тихо убить весь док.
+        self.root.report_callback_exception = lambda exc, val, tb: log_crash(
+            "tk_callback", val if isinstance(val, BaseException) else Exception(str(val)))
         self.root.title("Claude Dock")
         self.root.overrideredirect(True)
         self.root.wm_attributes("-topmost", True)
@@ -324,6 +341,7 @@ class Dock:
         self.tooltip = None
         self.hover_id = None
         self.show_idle = False
+        self.collapsed = False    # click the top count circle → fold the strip to just that number
         self._win_x = 0
         self._win_y = 0
 
@@ -506,8 +524,12 @@ class Dock:
 
     # ---------- данные ----------
     def _scan_loop(self):
+        # Поток скана НИКОГДА не должен умереть — иначе «головы» застывают навсегда.
         while True:
-            self._scan_once()
+            try:
+                self._scan_once()
+            except Exception as ex:
+                log_crash("scan_loop", ex)
             time.sleep(REFRESH)
 
     def _scan_once_async(self):
@@ -552,7 +574,9 @@ class Dock:
     # ---------- отрисовка (PIL) ----------
     def _build_pil(self, snap):
         heads, n_active, overflow, compact = self._select_heads(snap)
-        if not heads:
+        if self.collapsed:
+            heads, overflow = [], 0       # свёрнуто → рисуем только верхний кружок-счётчик
+        elif not heads:
             heads = [None]
         CS = COIN_C if compact else COIN        # размер аватара
         GS = GLOW_C if compact else GLOW
@@ -690,8 +714,23 @@ class Dock:
                 self.canvas.itemconfigure(self.img_item, image=self.frames[self.idx])
             self.root.wm_attributes("-topmost", True)
         except tk.TclError:
-            return
-        self.root.after(ANIM_MS, self._animate)
+            # Окно реально уничтожено (выход) — только тогда останавливаем цикл.
+            if not self._alive():
+                return
+        except Exception as ex:
+            # Любая другая ошибка (битый кадр, _place и т.п.) НЕ должна убивать анимацию.
+            log_crash("animate", ex)
+        # Всегда перепланируем — иначе док «зависает» и скан перестаёт обновляться.
+        try:
+            self.root.after(ANIM_MS, self._animate)
+        except tk.TclError:
+            pass
+
+    def _alive(self) -> bool:
+        try:
+            return bool(self.root.winfo_exists())
+        except tk.TclError:
+            return False
 
     # ---------- интерактив ----------
     def _hit(self, x, y):
@@ -794,6 +833,12 @@ class Dock:
             self.tooltip = None
 
     def on_click(self, e):
+        # клик по верхнему кружку-счётчику → свернуть ленту в эту цифру / развернуть обратно.
+        # когда свёрнуто, окно = сам кружок, поэтому любой клик по нему разворачивает.
+        if self.collapsed or e.y < HEADER:
+            self.collapsed = not self.collapsed
+            self._force_render()
+            return
         s = self._hit(e.x, e.y)
         if isinstance(s, dict):
             cu.mark_seen(s.get("session_id"))      # клик снимает «непрочитано»
@@ -801,6 +846,18 @@ class Dock:
             self._scan_once_async()
         else:
             self.open_detail(None)
+
+    def _force_render(self):
+        """Immediately rebuild the strip image from the last snapshot (used after a
+        collapse/expand toggle so it reacts on click, not on the next scan tick)."""
+        snap = self.snapshot
+        if not snap:
+            return
+        try:
+            frames, regions, size = self._build_pil(snap)
+            self._pending = (snap, frames, regions, size)
+        except Exception as ex:
+            log_crash("force_render", ex)
 
     # ---------- полное окно ----------
     def open_detail(self, highlight_sid):
@@ -926,7 +983,24 @@ class Dock:
         self.root.mainloop()
 
 
+def _single_instance_or_exit():
+    """Один док на машину. Держим именованный мьютекс Windows на всё время жизни —
+    если второй запуск (logon-задача + watchdog одновременно), он сразу выходит."""
+    try:
+        import ctypes
+        ERROR_ALREADY_EXISTS = 183
+        h = ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\ClaudeDock_SingleInstance")
+        if not h or ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+            print("dock already running — exiting", file=sys.stderr)
+            sys.exit(0)
+        return h  # держим хэндл живым до конца процесса
+    except Exception as ex:
+        log_crash("single_instance", ex)
+        return None
+
+
 def main():
+    _MUTEX = _single_instance_or_exit()  # noqa: F841 — держит мьютекс весь процесс
     side = "right" if "--right" in sys.argv else "left"
     if "--selftest" in sys.argv:
         d = Dock(side=side)
