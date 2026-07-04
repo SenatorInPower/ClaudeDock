@@ -38,6 +38,7 @@ Who's working, who's waiting on you, who just replied — one look. Costs **0 ex
 - [⚙️ Configuration](#️-configuration)
 - [🖥️ The three surfaces](#️-the-three-surfaces)
 - [🌐 Remote access (with or without Telegram)](#-remote-access-with-or-without-telegram)
+- [🚀 Launch agents on a VPS (headless, pick the model)](#-launch-agents-on-a-vps-headless-pick-the-model)
 - [🔒 Security](#-security)
 - [💸 Cost](#-cost)
 - [🧠 How it works](#-how-it-works)
@@ -140,6 +141,34 @@ ClaudeDock watches the sessions **on the machine it runs on**, so it's self‑ho
 3. **Telegram Mini App.** Control locked to your Telegram user id via signed `initData`. See `run_webapp.example.ps1`.
 
 > 🔑 Rule of thumb: **viewing** can be shared; **control** stays with you (loopback, password, or Telegram). Want a teammate to drive *their* agents? They run their own ClaudeDock.
+
+## 🚀 Launch agents on a VPS (headless, pick the model)
+
+ClaudeDock isn't only a viewer — the **Launch** action (web / Telegram / dock right‑click) starts a *fresh* Claude Code session for a project, and the same idea works on a remote server. Kick off a long job on a VPS, keep your laptop free, and watch or steer it from your phone.
+
+**Start a headless agent on the server** — choose the model per task:
+
+```bash
+# Opus 4.8 — deepest reasoning (heavier, pricier). Good for big refactors / gnarly bugs.
+claude -p "Refactor the payment webhook and add tests" \
+  --model opus --permission-mode acceptEdits
+
+# Sonnet 5 — fast and cheaper; a great default for iteration.
+claude -p "Fix the failing CI on branch main" --model sonnet
+```
+
+- `--model` takes an **alias** (`opus` / `sonnet`) or a **full id** (`claude-opus-4-8`, `claude-sonnet-5`) — swap it to pick the model per run.
+- `-p / --print` runs **non‑interactively**, so it works over SSH, cron, or a systemd unit with no TTY. Add `--output-format json` to capture the result, or wrap it in a script that reports back over Telegram.
+- Point ClaudeDock at those sessions by running **one instance on the VPS** (it reads *that host's* `~/.claude`) and exposing its web port over an SSH tunnel + TLS — see [Remote access](#-remote-access-with-or-without-telegram). The server's agents then appear in the same dock, with 🟠 / 🔵 telling you when one is working vs waiting on you.
+
+### 🔑 The VPS has its own keys — keep them there (this repo is public)
+
+- The server authenticates Claude **independently** from your laptop: either its own `claude login`, or an `ANTHROPIC_API_KEY` in the server's environment (shell profile, a systemd `Environment=`, or the server's own `config.json`). **Never** put a key in this repo.
+- **Anything committed here is world‑readable.** So:
+  - Keep `config.json`, `.env`, tokens, and the VPS host / user **out of git**. `config.json` is already git‑ignored — share only `config.example.json` with placeholders.
+  - Don't paste server secrets, private hostnames, or API keys into the **launch prompt** — prompts are saved into transcripts.
+  - Rotate any key that ever landed in a commit, a log, or a screenshot.
+- Gate the VPS web cockpit like any remote instance: secret URL token **+** password (or Telegram `initData`), behind TLS. Viewing can be shared; **control stays yours**.
 
 ## 🔒 Security
 
