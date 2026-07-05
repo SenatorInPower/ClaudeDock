@@ -17,8 +17,10 @@ Telegram WebApp initData (HMAC по токену бота, user.id == владе
 """
 import hashlib
 import hmac
+import base64
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -46,6 +48,7 @@ MINIAPP = ROOT / "miniapp.html"
 CLAUDE = config.claude_bin()
 WEB_PASSWORD = config.get("web_password")   # optional: password login for remote control without Telegram
 WEB_TRUST_KEY = config.get("web_trust_key")  # a reverse proxy behind its OWN auth (e.g. nginx htpasswd) sends
+VPS = config.get("vps") or {}               # optional: launch/connect a session on a remote server over SSH
                                              # header X-ClaudeDock-Auth: <key> to vouch for the request -> control
 
 
@@ -204,6 +207,73 @@ def run_resume_async(name: str, session_id: str, path, label: str, prompt: str, 
 
 
 # ---------------------------------------------------------------------------
+# VPS — launch/connect a session on a remote server over SSH (config["vps"])
+# The server keeps its OWN Claude auth; we never send keys, only the prompt.
+# ---------------------------------------------------------------------------
+def _ssh_base(tty: bool = False):
+    """Common ssh args from config (key-based, non-interactive-safe)."""
+    args = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "ConnectTimeout=15"]
+    if tty:
+        args.append("-t")
+    if VPS.get("key"):
+        args += ["-i", VPS["key"]]
+    return args
+
+
+def _vps_wrap(inner: str) -> str:
+    """Wrap a shell command to run as a non-root user (run_user) when set, so
+    `claude` can use --dangerously-skip-permissions (blocked under root)."""
+    run_user = VPS.get("run_user")
+    if run_user and run_user != VPS.get("user", "root"):
+        return f"sudo -u {run_user} -H bash -lc {shlex.quote(inner)}"
+    return f"bash -lc {shlex.quote(inner)}"
+
+
+def run_vps_headless(name: str, prompt: str, model: str = "sonnet"):
+    """Run `claude -p --model <model>` on the VPS; result comes back to Telegram."""
+    host = VPS.get("host"); user = VPS.get("user", "root")
+    claude_r = VPS.get("claude", "/usr/bin/claude"); wdir = VPS.get("dir") or "~"
+    tg_send(f"🖥 *{name}* — VPS · {model}: запускаю на {host}…")
+
+    def _worker():
+        # prompt travels base64-encoded so no quoting/locale can mangle it remotely
+        b64 = base64.b64encode(prompt.encode("utf-8")).decode("ascii")
+        inner = (f"cd {shlex.quote(wdir)} 2>/dev/null; "
+                 f"P=$(printf %s {b64} | base64 -d); "
+                 f"{shlex.quote(claude_r)} -p \"$P\" --model {model} "
+                 f"--dangerously-skip-permissions --output-format text")
+        cmd = _ssh_base() + [f"{user}@{host}", _vps_wrap(inner)]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=1800)
+            out = (r.stdout or "").strip()
+            if not out and r.stderr and r.stderr.strip():
+                out = "[stderr] " + r.stderr.strip()
+            out = out or "(пустой ответ)"
+        except subprocess.TimeoutExpired:
+            out = "⏱ Таймаут (30 мин)."
+        except Exception as e:
+            out = f"Ошибка SSH: {e}"
+        tg_send(f"🖥 *{name}* — VPS готово:\n\n{out[:3500]}")
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def start_vps_session(model: str = "sonnet") -> None:
+    """Open an interactive claude session ON the VPS in a new console on this PC."""
+    host = VPS.get("host"); user = VPS.get("user", "root")
+    claude_r = VPS.get("claude", "/usr/bin/claude"); wdir = VPS.get("dir") or "~"
+    keyarg = f"-i '{_ps_lit(VPS['key'])}' " if VPS.get("key") else ""
+    inner = f"cd {shlex.quote(wdir)}; {shlex.quote(claude_r)} --model {model} --dangerously-skip-permissions"
+    remote = _vps_wrap(inner).replace('"', '\\"')
+    ps = f"ssh {keyarg}-t {user}@{host} \"{remote}\""
+    subprocess.Popen(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+        creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0), close_fds=True,
+    )
+
+
+# ---------------------------------------------------------------------------
 # HTTP
 # ---------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
@@ -278,7 +348,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": str(e)}, 500)
         elif sub == "/api/projects":
             try:
-                self._json({"projects": recent_projects()})
+                self._json({"projects": recent_projects(),
+                            "vps": {"enabled": bool(VPS.get("host")),
+                                    "label": VPS.get("label") or "🖥 VPS"}})
             except Exception as e:
                 self._json({"error": str(e)}, 500)
         elif sub == "/api/auth":
@@ -354,6 +426,19 @@ class Handler(BaseHTTPRequestHandler):
         sid = data.get("session_id", "")
         cwd = path_ if (path_ and os.path.isdir(path_)) else None
         try:
+            if action in ("vps_headless", "vps_session"):
+                if not VPS.get("host"):
+                    return self._json({"ok": False, "error": "VPS не настроен (ключ vps в config.json)"}, 400)
+                model = data.get("model", "sonnet")
+                if model not in ("opus", "sonnet"):
+                    model = "sonnet"
+                if action == "vps_session":
+                    start_vps_session(model)
+                    return self._json({"ok": True, "msg": f"🖥 Открываю сессию на VPS ({model}) — терминал на ПК."})
+                if not task:
+                    return self._json({"ok": False, "error": "пустая задача"}, 400)
+                run_vps_headless(VPS.get("label") or "VPS", task, model)
+                return self._json({"ok": True, "msg": f"🖥 VPS ({model}) запущен — ответ придёт в Telegram."})
             if action in ("new_session", "headless"):
                 if not cwd:
                     return self._json({"ok": False, "error": "проект не найден"}, 400)

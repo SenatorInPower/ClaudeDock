@@ -146,6 +146,8 @@ ClaudeDock watches the sessions **on the machine it runs on**, so it's self‑ho
 
 ClaudeDock isn't only a viewer — the **Launch** action (web / Telegram / dock right‑click) starts a *fresh* Claude Code session for a project, and the same idea works on a remote server. Kick off a long job on a VPS, keep your laptop free, and watch or steer it from your phone.
 
+**Built‑in 🖥 VPS button.** Add a `vps` block to `config.json` (see `config.example.json`) and a **🖥 VPS** control appears in the Launch tab: pick **Opus 4.8** or **Sonnet 5**, type a task, and it runs `claude -p --model …` on your server over SSH — headless, with the result pushed back to Telegram — or opens an interactive session. No project selection needed. If you SSH in as `root`, set `run_user` to a non‑root account that has `claude` logged in (Claude refuses `--dangerously-skip-permissions` under root).
+
 **Start a headless agent on the server** — choose the model per task:
 
 ```bash

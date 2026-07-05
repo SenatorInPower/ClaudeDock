@@ -43,6 +43,11 @@ _DEFAULTS = {
     "project_names": [],
     # Projects shown in the "launch a session" picker. [{"name","path"}, ...]
     "launch_projects": [],
+    # Optional: launch/connect a Claude session on a remote server over SSH.
+    # {"host","user","key","claude","dir","label"} — all live in config.json only
+    # (git-ignored). Empty = the VPS button stays hidden. The server keeps its OWN
+    # Claude auth (its `claude login` / ANTHROPIC_API_KEY) — never put keys here.
+    "vps": {},
 }
 
 # Built-in display names for common system locations (kept generic / no PII).

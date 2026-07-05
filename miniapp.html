@@ -139,6 +139,20 @@ textarea{width:100%;min-height:96px;background:var(--card);border:1px solid var(
     <button class="btn s" id="b-head" onclick="run('headless')" data-i18n="headless">⚡ Headless</button>
   </div>
   <div class="muted" data-i18n-html="run_hint" style="margin-top:8px;font-size:12px;line-height:1.5">▶ if a session in the project is already waiting, your task is appended to it; otherwise a new window opens.<br>⚡ headless — a one-shot agent that closes itself; the answer comes to Telegram.</div>
+
+  <div id="vps-block" class="field hidden" style="margin-top:16px;border-top:1px solid var(--line,#222);padding-top:14px">
+    <label>🖥 <span id="vps-label">VPS</span> — <span data-i18n="vps_model">модель</span></label>
+    <div class="btns" style="gap:8px">
+      <button class="btn" id="vps-opus" onclick="setVpsModel('opus')">Opus 4.8</button>
+      <button class="btn p" id="vps-sonnet" onclick="setVpsModel('sonnet')">Sonnet 5</button>
+    </div>
+    <div class="btns" style="margin-top:8px">
+      <button class="btn p" id="b-vps" onclick="runVps('vps_headless')">🖥 <span data-i18n="vps_run">На VPS → Telegram</span></button>
+      <button class="btn s" id="b-vps-term" onclick="runVps('vps_session')">💻 <span data-i18n="vps_term">Терминал</span></button>
+    </div>
+    <div class="muted" data-i18n="vps_hint" style="margin-top:6px;font-size:12px;line-height:1.5">Задача из поля выше уйдёт на твой VPS (claude -p), ответ придёт в Telegram. Проект выбирать не нужно. У сервера свои ключи.</div>
+  </div>
+
   <div class="toast" id="toast"></div>
 </div>
 </div>
@@ -286,16 +300,44 @@ function st(n,l){return '<div class="stat"><div class="n">'+n+'</div><div class=
 
 async function loadProjects(){
   if(!canControl){ document.getElementById('run-warn').classList.remove('hidden'); }
+  let vps=null;
   try{
     const d=await (await fetch('./api/projects',{cache:'no-store'})).json();
-    projects=d.projects||[];
+    projects=d.projects||[]; vps=d.vps||null;
   }catch(e){ projects=[]; }
   const box=document.getElementById('projects');
   box.innerHTML=projects.map((p,i)=>'<div class="chip" data-i="'+i+'" onclick="pick('+i+')">'+esc(splitEmoji(p.name)[0])+' '+esc(splitEmoji(p.name)[1])+'</div>').join('') || '<span class="muted">нет проектов</span>';
+  const vb=document.getElementById('vps-block');
+  if(vps && vps.enabled){ vb.classList.remove('hidden'); document.getElementById('vps-label').textContent=(vps.label||'🖥 VPS').replace(/^🖥\s*/,''); }
+  else vb.classList.add('hidden');
 }
 function pick(i){
   selProj=projects[i];
   document.querySelectorAll('.chip').forEach((c,j)=>c.classList.toggle('on',j===i));
+}
+let vpsModel='sonnet';
+function setVpsModel(m){
+  vpsModel=m;
+  document.getElementById('vps-opus').className='btn'+(m==='opus'?' p':'');
+  document.getElementById('vps-sonnet').className='btn'+(m==='sonnet'?' p':'');
+}
+async function runVps(action){
+  const task=document.getElementById('task').value.trim();
+  const toast=document.getElementById('toast');
+  if(action==='vps_headless' && !task){ toast.className='toast err'; toast.style.display='block'; toast.textContent='Напиши задачу'; return; }
+  if(!canControl){ toast.className='toast err'; toast.style.display='block'; toast.textContent='Управление — из Telegram или на ПК (127.0.0.1:8765)'; return; }
+  const b1=document.getElementById('b-vps'), b2=document.getElementById('b-vps-term');
+  b1.disabled=true; b2.disabled=true;
+  toast.className='toast'; toast.style.display='block'; toast.textContent='🖥 VPS…';
+  try{
+    if(tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    const r=await fetch('./api/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({initData,action,model:vpsModel,task})});
+    const j=await r.json();
+    if(j.ok){ toast.className='toast ok'; toast.textContent='✅ '+(j.msg||'Готово'); if(action==='vps_headless') document.getElementById('task').value=''; }
+    else { toast.className='toast err'; toast.textContent='❌ '+(j.error||'ошибка'); }
+  }catch(e){ toast.className='toast err'; toast.textContent='❌ сеть: '+e; }
+  b1.disabled=false; b2.disabled=false;
 }
 async function run(action){
   const task=document.getElementById('task').value.trim();

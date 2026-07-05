@@ -22,5 +22,16 @@
   "launch_projects": [
     { "name": "Backend",  "path": "C:/code/myorg/backend" },
     { "name": "Web App",  "path": "C:/code/myorg/web-app" }
-  ]
+  ],
+
+  "_vps_note": "Optional: adds a 🖥 VPS button to Launch that runs `claude -p --model opus|sonnet` on your server over SSH (headless -> result to Telegram) or opens an interactive session. The server authenticates Claude on its own (its `claude login` / ANTHROPIC_API_KEY) — do NOT put any API key here. Uses key-based SSH. If you connect as root, set `run_user` to a NON-root user that has `claude` logged in, because Claude refuses --dangerously-skip-permissions under root.",
+  "vps": {
+    "host": "your.server.com",
+    "user": "root",
+    "run_user": "dev",
+    "key": "C:/Users/you/.ssh/id_ed25519",
+    "claude": "/usr/bin/claude",
+    "dir": "/home/dev",
+    "label": "🖥 VPS"
+  }
 }
