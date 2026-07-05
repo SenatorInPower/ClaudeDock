@@ -150,7 +150,10 @@ textarea{width:100%;min-height:96px;background:var(--card);border:1px solid var(
       <button class="btn p" id="b-vps" onclick="runVps('vps_headless')">🖥 <span data-i18n="vps_run">На VPS → Telegram</span></button>
       <button class="btn s" id="b-vps-term" onclick="runVps('vps_session')">💻 <span data-i18n="vps_term">Терминал</span></button>
     </div>
-    <div class="muted" data-i18n="vps_hint" style="margin-top:6px;font-size:12px;line-height:1.5">Задача из поля выше уйдёт на твой VPS (claude -p), ответ придёт в Telegram. Проект выбирать не нужно. У сервера свои ключи.</div>
+    <div class="btns" style="margin-top:8px">
+      <button class="btn s" id="b-vps-kill" onclick="runVps('vps_kill')">🧹 <span data-i18n="vps_kill">Закрыть сессии VPS</span></button>
+    </div>
+    <div class="muted" data-i18n-html="vps_hint" style="margin-top:6px;font-size:12px;line-height:1.5">Задача из поля выше запускается на ВПС как <b>claude -p</b> — разово, ответ придёт в Telegram. <b>Терминал</b> открывает живую сессию на ПК.</div>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -195,6 +198,8 @@ const I18N={
   now:'just now',min:'min',hr:'h',day:'d',
   run_warn:'Control: from Telegram, on this PC (127.0.0.1), or <a href="#" onclick="login();return false" style="color:var(--orange);font-weight:700">🔓 log in</a>. Viewing works everywhere.',
   run_hint:'▶ if a session in the project is already waiting, your task is appended to it; otherwise a new window opens.<br>⚡ headless — a one-shot agent that closes itself; the answer comes to Telegram.',
+  vps_model:'model',vps_run:'Run on VPS → Telegram',vps_term:'Terminal',vps_kill:'Close VPS sessions',
+  vps_hint:'The task above runs on your VPS as <b>claude -p</b> — one-shot, the reply comes to Telegram (phone-friendly). <b>Terminal</b> opens an interactive session on your PC. No project needed; the server uses its own keys.',
   sh_warn:'Control only when opened from Telegram or on the PC (127.0.0.1:8765).',
   pick_project:'Pick a project',write_task:'Write a task',ctl_note:'Control — from Telegram or on the PC',login_prompt:'Password to control:'},
  ru:{loading:'загрузка…',autoupd:'обновляется само',error:'ошибка',agents:'🤖 Агенты',launch:'🚀 Запуск',
@@ -209,6 +214,8 @@ const I18N={
   now:'только что',min:'мин',hr:'ч',day:'дн',
   run_warn:'Управление: из Telegram, прямо с ПК (127.0.0.1), или <a href="#" onclick="login();return false" style="color:var(--orange);font-weight:700">🔓 войти по паролю</a>. Просмотр работает везде.',
   run_hint:'▶ если в проекте уже есть сессия «ждёт» — допишу задачу в неё; иначе откроется новое окно.<br>⚡ headless — разовый агент, закроется сам, ответ придёт в Telegram.',
+  vps_model:'модель',vps_run:'На VPS → Telegram',vps_term:'Терминал',vps_kill:'Закрыть сессии VPS',
+  vps_hint:'Задача из поля выше запускается на ВПС как <b>claude -p</b> — разово, ответ придёт в Telegram (удобно с телефона). <b>Терминал</b> открывает живую сессию на ПК. Проект не нужен; у сервера свои ключи.',
   sh_warn:'Управление — только из Telegram или прямо на ПК (127.0.0.1:8765).',
   pick_project:'Выбери проект',write_task:'Напиши задачу',ctl_note:'Управление — из Telegram или прямо на ПК',login_prompt:'Пароль для управления:'},
  uk:{loading:'завантаження…',autoupd:'оновлюється само',error:'помилка',agents:'🤖 Агенти',launch:'🚀 Запуск',
@@ -223,6 +230,8 @@ const I18N={
   now:'щойно',min:'хв',hr:'год',day:'дн',
   run_warn:'Керування: з Telegram, прямо з ПК (127.0.0.1), або <a href="#" onclick="login();return false" style="color:var(--orange);font-weight:700">🔓 увійти за паролем</a>. Перегляд працює всюди.',
   run_hint:'▶ якщо в проєкті вже є сесія «очікує» — допишу завдання в неї; інакше відкриється нове вікно.<br>⚡ headless — разовий агент, закриється сам, відповідь прийде в Telegram.',
+  vps_model:'модель',vps_run:'На VPS → Telegram',vps_term:'Термінал',vps_kill:'Закрити сесії VPS',
+  vps_hint:'Завдання з поля вище запускається на ВПС як <b>claude -p</b> — разово, відповідь прийде в Telegram (зручно з телефона). <b>Термінал</b> відкриває живу сесію на ПК. Проєкт не потрібен; у сервера свої ключі.',
   sh_warn:'Керування — лише з Telegram або прямо з ПК (127.0.0.1:8765).',
   pick_project:'Обери проєкт',write_task:'Напиши завдання',ctl_note:'Керування — з Telegram або прямо з ПК',login_prompt:'Пароль для керування:'}
 };
@@ -326,9 +335,9 @@ async function runVps(action){
   const toast=document.getElementById('toast');
   if(action==='vps_headless' && !task){ toast.className='toast err'; toast.style.display='block'; toast.textContent='Напиши задачу'; return; }
   if(!canControl){ toast.className='toast err'; toast.style.display='block'; toast.textContent='Управление — из Telegram или на ПК (127.0.0.1:8765)'; return; }
-  const b1=document.getElementById('b-vps'), b2=document.getElementById('b-vps-term');
-  b1.disabled=true; b2.disabled=true;
-  toast.className='toast'; toast.style.display='block'; toast.textContent='🖥 VPS…';
+  const b1=document.getElementById('b-vps'), b2=document.getElementById('b-vps-term'), b3=document.getElementById('b-vps-kill');
+  b1.disabled=true; b2.disabled=true; b3.disabled=true;
+  toast.className='toast'; toast.style.display='block'; toast.textContent=action==='vps_kill'?'🧹 Закрываю…':'🖥 VPS…';
   try{
     if(tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
     const r=await fetch('./api/run',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -337,7 +346,7 @@ async function runVps(action){
     if(j.ok){ toast.className='toast ok'; toast.textContent='✅ '+(j.msg||'Готово'); if(action==='vps_headless') document.getElementById('task').value=''; }
     else { toast.className='toast err'; toast.textContent='❌ '+(j.error||'ошибка'); }
   }catch(e){ toast.className='toast err'; toast.textContent='❌ сеть: '+e; }
-  b1.disabled=false; b2.disabled=false;
+  b1.disabled=false; b2.disabled=false; b3.disabled=false;
 }
 async function run(action){
   const task=document.getElementById('task').value.trim();

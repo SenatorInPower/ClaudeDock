@@ -259,6 +259,25 @@ def run_vps_headless(name: str, prompt: str, model: str = "sonnet"):
     threading.Thread(target=_worker, daemon=True).start()
 
 
+def kill_vps_sessions() -> str:
+    """Kill lingering `claude` processes on the VPS (headless leftovers / closed
+    terminals). Returns how many were killed, or 'err:…'."""
+    host = VPS.get("host"); user = VPS.get("user", "root")
+    run_user = VPS.get("run_user") or user
+    # root can signal the run_user's processes directly (no sudo needed to kill)
+    inner = (f"N=$(pgrep -u {shlex.quote(run_user)} -f 'claude-code/cli.js' | wc -l); "
+             f"pkill -u {shlex.quote(run_user)} -f 'claude-code/cli.js' 2>/dev/null; "
+             f"printf killed:%s \"$N\"")
+    cmd = _ssh_base() + [f"{user}@{host}", f"bash -lc {shlex.quote(inner)}"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=30)
+        out = (r.stdout or "").strip()
+        return out.split("killed:")[-1].strip() if "killed:" in out else "?"
+    except Exception as e:
+        return f"err:{e}"
+
+
 def start_vps_session(model: str = "sonnet") -> None:
     """Open an interactive claude session ON the VPS in a new console on this PC."""
     host = VPS.get("host"); user = VPS.get("user", "root")
@@ -426,9 +445,14 @@ class Handler(BaseHTTPRequestHandler):
         sid = data.get("session_id", "")
         cwd = path_ if (path_ and os.path.isdir(path_)) else None
         try:
-            if action in ("vps_headless", "vps_session"):
+            if action in ("vps_headless", "vps_session", "vps_kill"):
                 if not VPS.get("host"):
                     return self._json({"ok": False, "error": "VPS не настроен (ключ vps в config.json)"}, 400)
+                if action == "vps_kill":
+                    m = kill_vps_sessions()
+                    if m.startswith("err:"):
+                        return self._json({"ok": False, "error": "VPS: " + m[4:]}, 500)
+                    return self._json({"ok": True, "msg": f"🧹 Закрыто сессий claude на VPS: {m}"})
                 model = data.get("model", "sonnet")
                 if model not in ("opus", "sonnet"):
                     model = "sonnet"
