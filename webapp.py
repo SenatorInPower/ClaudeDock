@@ -185,14 +185,50 @@ def session_live_pid(sid: str):
     return pid, status
 
 
+def _submitted(sid, prompt, before_size, before_upd):
+    """Признак, что ход ПРИНЯТ: ждавшая сессия ушла в работу (status≠idle или
+    statusUpdatedAt вырос) — это появляется раньше записи в транскрипт; плюс запасной
+    признак — ход уже виден в транскрипте."""
+    st, upd = cu.session_activity(sid)
+    if st and st != "idle":
+        return True
+    if upd and before_upd and upd > before_upd:
+        return True
+    return cu.user_said(sid, prompt, before_size)
+
+
+def _confirm_submit(sid: str, prompt: str, before: int, before_upd, pid, aggressive: bool):
+    """Убедиться, что впечатанный промт реально ОТПРАВЛЕН. Если нет — Enter «съелся»
+    под лагом → жмём Enter ещё раз. aggressive=True (сессия ждала ввода) → до 3 попыток;
+    иначе — одна проверка. Возврат: True / False (не подтвердилось) / None (не проверяли)."""
+    rounds = 3 if aggressive else 1
+    for i in range(rounds):
+        deadline = time.time() + (2.5 if aggressive else 1.5)
+        while time.time() < deadline:
+            if _submitted(sid, prompt, before, before_upd):
+                return True
+            time.sleep(0.35)
+        if aggressive and i < rounds - 1:
+            terminal_inject.send_enter(pid)     # повторный Enter — добить отправку
+    return True if _submitted(sid, prompt, before, before_upd) else (False if aggressive else None)
+
+
 def inject_live(sid: str, prompt: str):
-    """Попробовать впечатать ход в живой терминал сессии. (ok, message|None).
-    ok=None — сессия не живая (нет PID), нужно идти через resume."""
+    """Впечатать ход в живой терминал сессии и подтвердить отправку.
+    Возврат: (ok, (pid, msg, confirmed)). ok=None — сессия не живая (нет PID) → resume."""
     pid, status = session_live_pid(sid)
     if not (pid and status in ("run", "wait")):
         return None, None
+    before = cu.transcript_size(sid)
+    _st0, before_upd = cu.session_activity(sid)
     ok, msg = terminal_inject.send_to_terminal(pid, prompt)
-    return ok, (pid, msg)
+    if not ok:
+        return ok, (pid, msg, None)
+    # проверяем/добиваем отправку только для настоящих промтов на ждущей сессии;
+    # слэш-команды (/compact,/clear) не ложатся обычным ходом → не верифицируем.
+    aggressive = (status == "wait") and not prompt.strip().startswith("/")
+    confirmed = _confirm_submit(sid, prompt, before, before_upd, pid, aggressive=aggressive)
+    return True, (pid, msg, confirmed)
 
 
 def _claude_ps(cwd, mid: str, prompt: str, timeout: int = 1800) -> str:
@@ -458,13 +494,21 @@ class Handler(BaseHTTPRequestHandler):
                 # ответ идёт В ТО ЖЕ окно. Иначе — headless resume с ответом сюда.
                 ok, info = inject_live(sid, prompt)
                 if ok is True:
-                    pid, _ = info
+                    pid, _msg, confirmed = info
+                    if confirmed is True:
+                        resp = ("✅ Отправлено в консоль сессии (PID %s) — впечатано и "
+                                "принято (Enter сработал). Ответ появится в том же окне." % pid)
+                    elif confirmed is False:
+                        resp = ("⌨ Текст впечатан в окно (PID %s), но подтверждения отправки "
+                                "нет даже после повторного Enter. Глянь окно сессии — возможно, "
+                                "нужно нажать Enter вручную." % pid)
+                    else:
+                        resp = ("⌨ Впечатано и отправлено (Enter) в консоль сессии (PID %s). "
+                                "Результат появится в том же окне." % pid)
                     return self._json({"ok": True, "injected": True,
-                        "response": ("✅ Впечатано в живой терминал сессии (PID %s). "
-                                     "Ответ появится в самом окне сессии — это та же "
-                                     "сессия, контекст сохранён." % pid)})
+                                       "confirmed": confirmed, "response": resp})
                 if ok is False:
-                    pid, msg = info
+                    pid, msg, _ = info
                     return self._json({"ok": True, "injected": False,
                         "response": "⚠ Не удалось впечатать в окно (%s). "
                                     "Окно сессии закрыто? Попробуй ещё раз." % msg})
@@ -539,10 +583,15 @@ class Handler(BaseHTTPRequestHandler):
                 # Живая сессия — впечатываем прямо в окно (та же сессия, ответ там же).
                 ok, info = inject_live(sid, prompt)
                 if ok is True:
-                    pid, _ = info
-                    self._json({"ok": True, "msg": f"Впечатано в живой терминал «{name}» (PID {pid}) — ответ в самом окне сессии."})
+                    pid, _msg, confirmed = info
+                    if confirmed is False:
+                        self._json({"ok": True, "msg": f"⌨ Впечатано в «{name}» (PID {pid}), но отправка не подтвердилась — глянь окно, возможно нужен Enter вручную."})
+                    elif confirmed is True:
+                        self._json({"ok": True, "msg": f"Отправлено в «{name}» (PID {pid}) — принято. Ответ в самом окне сессии."})
+                    else:
+                        self._json({"ok": True, "msg": f"Впечатано и отправлено (Enter) в «{name}» (PID {pid}). Результат в самом окне сессии."})
                 elif ok is False:
-                    pid, msg = info
+                    pid, msg, _ = info
                     self._json({"ok": False, "error": f"не удалось впечатать в окно ({msg}) — окно закрыто?"}, 502)
                 elif action == "continue":
                     resume_in_console(name, sid, cwd or path_, prompt)

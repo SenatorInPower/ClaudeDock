@@ -35,6 +35,7 @@ import ctypes.wintypes as wt
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 
 _IS_WIN = os.name == "nt"
@@ -101,23 +102,45 @@ def _vk_sc(ch):
     return VK_PACKET, 0x01
 
 
-def _records_for_text(text):
-    """One key-down + key-up record per character (Enter as '\\r')."""
+def _one_record(ch, vk, sc, down):
+    r = _INPUT_RECORD()
+    r.EventType = KEY_EVENT
+    ke = r.KeyEvent
+    ke.bKeyDown = down
+    ke.wRepeatCount = 1
+    ke.wVirtualKeyCode = vk
+    ke.wVirtualScanCode = sc
+    ke.uChar.UnicodeChar = ch
+    ke.dwControlKeyState = 0
+    return r
+
+
+def _text_records(text):
+    """key-down + key-up per character — LITERAL text only, no Enter."""
     recs = []
     for ch in text:
         vk, sc = _vk_sc(ch)
-        for down in (1, 0):
-            r = _INPUT_RECORD()
-            r.EventType = KEY_EVENT
-            ke = r.KeyEvent
-            ke.bKeyDown = down
-            ke.wRepeatCount = 1
-            ke.wVirtualKeyCode = vk
-            ke.wVirtualScanCode = sc
-            ke.uChar.UnicodeChar = ch
-            ke.dwControlKeyState = 0
-            recs.append(r)
+        recs.append(_one_record(ch, vk, sc, 1))
+        recs.append(_one_record(ch, vk, sc, 0))
     return recs
+
+
+def _enter_records():
+    """A single standalone Enter (CR) keypress — submits the REPL line."""
+    vk = VK_RETURN
+    sc = u32.MapVirtualKeyW(VK_RETURN, 0) or 0x1C
+    return [_one_record("\r", vk, sc, 1), _one_record("\r", vk, sc, 0)]
+
+
+def _write_conin(h, recs):
+    """Write a batch of input records to the CONIN$ handle. (ok, written, errcode)."""
+    if not recs:
+        return True, 0, 0
+    n = len(recs)
+    arr = (_INPUT_RECORD * n)(*recs)
+    written = wt.DWORD(0)
+    ok = k32.WriteConsoleInputW(h, arr, n, ctypes.byref(written))
+    return bool(ok), written.value, ctypes.get_last_error()
 
 
 def _attach(pid):
@@ -134,13 +157,22 @@ def _attach(pid):
     return False, ctypes.get_last_error() or err
 
 
-def _inject_attached(pid, text):
-    """Attach to pid's console and write the text as console input.
+ENTER_SETTLE = 0.28   # пауза между текстом и Enter: даёт TUI дорисовать «вставку»,
+                      # тогда одиночный Enter трактуется как ОТПРАВКА, а не перевод строки
+
+
+def _inject_attached(pid, text, submit=True, settle=ENTER_SETTLE):
+    """Attach to pid's console and type `text`, then (optionally) press Enter as a
+    SEPARATE keystroke after a short settle.
+
+    Почему раздельно: если текст и Enter прилетают одним пакетом, TUI Claude Code
+    (Ink/Bun) считает это «вставкой» и Enter внутри неё превращается в перевод строки,
+    а не в отправку — ровно тот баг, когда «текст вписался, а не отправился». Отдельный
+    Enter после паузы приходит как самостоятельное нажатие и сабмитит строку.
 
     NB: intentionally does NOT FreeConsole afterwards — detaching after every write
     breaks the next AttachConsole in a long-lived process. We stay attached to the
-    last target; the next call detaches at its start (see _attach). The ctrl handler
-    keeps us alive if that window closes. Returns (ok, message)."""
+    last target; the next call detaches at its start (see _attach). Returns (ok, msg)."""
     if not _IS_WIN:
         return False, "только Windows"
     _install_ctrl_handler()
@@ -157,40 +189,53 @@ def _inject_attached(pid, text):
     if not h or h == wt.HANDLE(-1).value:
         return False, "CONIN$ открыть не удалось: код %d" % ctypes.get_last_error()
     try:
-        recs = _records_for_text(text)
-        n = len(recs)
-        arr = (_INPUT_RECORD * n)(*recs)
-        written = wt.DWORD(0)
-        ok = k32.WriteConsoleInputW(h, arr, n, ctypes.byref(written))
-        err = ctypes.get_last_error()
+        if text:
+            ok, _w, err = _write_conin(h, _text_records(text))
+            if not ok:
+                return False, "WriteConsoleInput (текст) не удался: код %d" % err
+        if submit:
+            if text:
+                time.sleep(settle)              # дать TUI дорисовать вставленный текст
+            ok2, _w2, err2 = _write_conin(h, _enter_records())
+            if not ok2:
+                return False, "текст впечатан, но Enter не прошёл: код %d" % err2
     finally:
         k32.CloseHandle(h)
-    if not ok:
-        return False, "WriteConsoleInput не удался: код %d" % err
-    return True, "впечатано %d символов" % (written.value // 2)
+    return True, ("впечатано %d символов%s" % (len(text), " + Enter" if submit else "")
+                  if text else "нажат Enter")
 
 
-def send_to_terminal(pid, text):
-    """Type `text` + Enter into the live session window owned by `pid`.
+def send_to_terminal(pid, text, submit=True):
+    """Type `text` (and, by default, press Enter) into the live session window of `pid`.
 
-    Injection is done IN-PROCESS (a freshly-spawned helper's records never reach
-    claude.exe — see module docstring), serialized by a lock since AttachConsole is
-    process-global. Safe to call from a worker thread. Returns (ok, message).
-    """
+    Injection is IN-PROCESS (a freshly-spawned helper's records never reach claude.exe —
+    see module docstring), serialized by a lock since AttachConsole is process-global.
+    The Enter is a SEPARATE keystroke after a settle so it submits, not newlines.
+    Safe to call from a worker thread. Returns (ok, message)."""
     if not _IS_WIN:
         return False, "инъекция в терминал только на Windows"
     if not pid:
         return False, "нет PID живой сессии"
-    text = (text or "").rstrip("\r\n")
-    if not text:
+    text = (text or "").rstrip("\r\n")   # свой перевод строки не шлём — за отправку отвечает Enter
+    if not text and submit is False:
         return False, "пустой текст"
-    if not text.endswith("\r"):
-        text += "\r"
     with _LOCK:
         try:
-            return _inject_attached(pid, text)
+            return _inject_attached(pid, text, submit=submit)
         except Exception as e:
             return False, "ошибка инъекции: %s" % e
+
+
+def send_enter(pid):
+    """Press Enter alone in the session's console — чтобы ОТПРАВИТЬ строку, которая
+    была впечатана, но не ушла (Enter «съелся» как перевод строки при лаге)."""
+    if not _IS_WIN or not pid:
+        return False, "нет PID"
+    with _LOCK:
+        try:
+            return _inject_attached(pid, "", submit=True)
+        except Exception as e:
+            return False, "ошибка Enter: %s" % e
 
 
 def _main(argv):

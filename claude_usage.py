@@ -547,6 +547,81 @@ def live_pid_status(sid: str):
     return None, None
 
 
+def transcript_file(sid: str):
+    """Путь к основному транскрипту сессии (…/projects/*/<sid>.jsonl) или None."""
+    if not sid or not PROJECTS_DIR.is_dir():
+        return None
+    hits = list(PROJECTS_DIR.glob(f"*/{sid}.jsonl"))
+    return hits[0] if hits else None
+
+
+def transcript_size(sid: str) -> int:
+    """Размер транскрипта в байтах (0 если нет) — точка отсчёта «до отправки»."""
+    tp = transcript_file(sid)
+    try:
+        return tp.stat().st_size if tp else 0
+    except OSError:
+        return 0
+
+
+def session_activity(sid: str):
+    """(status, statusUpdatedAt) живой сессии из sessions/<pid>.json, или (None, None).
+    Быстрый и надёжный признак «ход принят»: у ждавшей (idle) сессии после отправки
+    статус уходит в busy/shell/waiting, а statusUpdatedAt растёт — раньше, чем CLI
+    успевает записать ход в транскрипт."""
+    if not sid or not SESSIONS_DIR.is_dir():
+        return None, None
+    for f in SESSIONS_DIR.glob("*.json"):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if d.get("sessionId") == sid:
+            return (d.get("status") or "").lower(), d.get("statusUpdatedAt")
+    return None, None
+
+
+def user_said(sid: str, text: str, after: int = 0) -> bool:
+    """Появился ли в транскрипте НАСТОЯЩИЙ ход пользователя с текстом `text`
+    (после байтового смещения `after`). Так подтверждаем, что впечатанный промт
+    реально ОТПРАВЛЕН (сабмитнут), а не просто лежит в поле ввода."""
+    tp = transcript_file(sid)
+    needle = (text or "").strip()
+    if not tp or not needle:
+        return False
+    probe = needle[:60]
+    try:
+        with open(tp, "rb") as f:
+            if after:
+                f.seek(after)
+            data = f.read()
+    except OSError:
+        return False
+    if probe.encode("utf-8", "replace") not in data:
+        return False   # дешёвая отсечка до разбора JSON
+    for line in data.decode("utf-8", "replace").split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            o = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if o.get("type") != "user" or o.get("isMeta"):
+            continue
+        c = (o.get("message") or {}).get("content")
+        if isinstance(c, str):
+            s = c
+        elif isinstance(c, list):
+            s = " ".join(b.get("text", "") for b in c
+                         if isinstance(b, dict) and b.get("type") == "text")
+        else:
+            s = ""
+        if needle in s or probe in s:
+            return True
+    return False
+
+
 # ----------------------------------------------------------------------------
 # Живые сессии — фолбэк через `claude agents --json`
 # ----------------------------------------------------------------------------
