@@ -53,7 +53,7 @@ h1 .dotlogo{width:22px;height:22px;border-radius:7px;background:linear-gradient(
 .dot{width:8px;height:8px;border-radius:50%;background:#4a4640;flex:0 0 auto}
 .sess.run .dot{background:var(--yellow);box-shadow:0 0 7px var(--yellow)}
 .sess.wait .dot{background:var(--blue);box-shadow:0 0 7px var(--blue)}
-.hist{margin:8px 0 4px;max-height:30vh;overflow-y:auto}
+.hist{margin:8px 0 4px}
 .hist .h-row{display:flex;gap:8px;padding:5px 8px;border:1px solid var(--line);border-radius:9px;margin-bottom:5px;font-size:13px;cursor:pointer;align-items:baseline}
 .hist .h-row:hover{border-color:var(--orange)}
 .hist .h-n{color:var(--dim);font-size:11px;flex:0 0 auto;width:16px;text-align:right}
@@ -92,12 +92,32 @@ textarea{width:100%;min-height:96px;background:var(--card);border:1px solid var(
 .sess{cursor:pointer}
 .sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-end;z-index:50}
 .sheet-bg.on{display:flex}
-.sheet{background:var(--card2);border-top:1px solid var(--line);border-radius:18px 18px 0 0;padding:16px 16px calc(18px + env(safe-area-inset-bottom));width:100%;max-width:680px;margin:0 auto}
-.sheet-h{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:700}
-.sheet-h .x{margin-left:auto;color:var(--dim);font-size:22px;cursor:pointer;padding:0 6px}
-.sheet-task{margin:6px 0 12px;font-size:13px;color:var(--dim)}
-.sheet-row{display:flex;gap:9px;margin-bottom:11px}
-.chat{max-height:40vh;overflow-y:auto;margin:8px 0;display:flex;flex-direction:column;gap:7px}
+/* Шторка: не выше экрана, колонка из 3 зон — фиксированная шапка (крестик всегда
+   виден), прокручиваемая середина (одна на всё, без вложенных скроллов — иначе на
+   телефоне «не скроллится») и прижатый снизу composer. */
+.sheet{background:var(--card2);border-top:1px solid var(--line);border-radius:18px 18px 0 0;
+  width:100%;max-width:680px;margin:0 auto;display:flex;flex-direction:column;
+  max-height:min(92vh,900px);max-height:min(92dvh,900px)}
+.sheet-h{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:700;flex:0 0 auto;
+  padding:14px 16px 10px;border-bottom:1px solid var(--line);background:var(--card2);
+  border-radius:18px 18px 0 0}
+.sheet-h .x{margin-left:auto;color:var(--text);font-size:22px;cursor:pointer;padding:2px 8px;
+  border-radius:9px;background:var(--card);border:1px solid var(--line);line-height:1}
+.sheet-h .x:active{background:var(--orange);color:#1b1410}
+.sheet-scroll{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  overscroll-behavior:contain;padding:12px 16px 4px}
+.sheet-compose{flex:0 0 auto;padding:10px 16px calc(14px + env(safe-area-inset-bottom));
+  border-top:1px solid var(--line);background:var(--card2)}
+.sheet-task{margin:0 0 12px;font-size:13px;color:var(--dim)}
+.sheet-row{display:flex;gap:9px;margin-bottom:0}
+.chat{margin:8px 0 2px;display:flex;flex-direction:column;gap:7px}
+/* последний промт + последний ответ на него */
+.qa{margin:2px 0 10px}
+.qa-lbl{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin:8px 2px 4px;display:flex;gap:6px;align-items:center}
+.qa-box{font-size:13.5px;line-height:1.45;white-space:pre-wrap;word-break:break-word;padding:9px 11px;border-radius:11px}
+.qa-box.u{background:var(--card);border:1px solid var(--line);color:var(--text)}
+.qa-box.a{background:#13110d;border:1px solid var(--line);border-left:2px solid var(--blue);color:#cfc9bd}
+.qa-box.empty{color:var(--dim);font-style:italic;border-style:dashed}
 .msg{padding:8px 11px;border-radius:12px;font-size:14px;white-space:pre-wrap;word-break:break-word;max-width:92%;line-height:1.4}
 .msg.u{align-self:flex-end;background:var(--orange);color:#1b1410}
 .msg.a{align-self:flex-start;background:var(--card);border:1px solid var(--line)}
@@ -162,18 +182,28 @@ textarea{width:100%;min-height:96px;background:var(--card);border:1px solid var(
 <div class="sheet-bg" id="sheet" onclick="if(event.target===this)closeSheet()">
   <div class="sheet">
     <div class="sheet-h"><span id="sh-proj"></span><span id="sh-st" class="s-st"></span><span class="x" onclick="closeSheet()">✕</span></div>
-    <div class="sheet-task" id="sh-task"></div>
-    <div class="hist-lbl" data-i18n="hist">📜 Command history (last 10)</div>
-    <div id="sh-hist" class="hist"></div>
-    <div id="sh-warn" class="warn hidden" data-i18n="sh_warn">Control only when opened from Telegram or on the PC (127.0.0.1:8765).</div>
-    <div id="sh-chat" class="chat"></div>
-    <div class="sheet-row">
-      <button class="btn s" onclick="sheetAction('compact')">🗜 Compact</button>
-      <button class="btn s" onclick="sheetAction('clear')">🧹 Clear</button>
+    <div class="sheet-scroll">
+      <div class="sheet-task" id="sh-task"></div>
+      <div class="qa">
+        <div class="qa-lbl">📤 <span data-i18n="last_prompt">last prompt</span></div>
+        <div id="sh-lastprompt" class="qa-box u"></div>
+        <div class="qa-lbl">📥 <span data-i18n="last_reply">agent's last reply</span></div>
+        <div id="sh-lastreply" class="qa-box a"></div>
+      </div>
+      <div class="hist-lbl" data-i18n="hist">📜 Command history (last 10)</div>
+      <div id="sh-hist" class="hist"></div>
+      <div id="sh-warn" class="warn hidden" data-i18n="sh_warn">Control only when opened from Telegram or on the PC (127.0.0.1:8765).</div>
+      <div id="sh-chat" class="chat"></div>
     </div>
-    <textarea id="sh-prompt" data-i18n-ph="prompt_ph" placeholder="Message the session — like in the console (reply lands here)…"></textarea>
-    <button class="btn p" style="width:100%;margin-top:10px" onclick="sendChat()" data-i18n="send">▶ Send</button>
-    <div class="toast" id="sh-toast"></div>
+    <div class="sheet-compose">
+      <div class="sheet-row">
+        <button class="btn s" onclick="sheetAction('compact')">🗜 Compact</button>
+        <button class="btn s" onclick="sheetAction('clear')">🧹 Clear</button>
+      </div>
+      <textarea id="sh-prompt" data-i18n-ph="prompt_ph" placeholder="Message the session — like in the console (reply lands here)…"></textarea>
+      <button class="btn p" style="width:100%;margin-top:10px" onclick="sendChat()" data-i18n="send">▶ Send</button>
+      <div class="toast" id="sh-toast"></div>
+    </div>
   </div>
 </div>
 <script>
@@ -194,7 +224,8 @@ const I18N={
   stat_wl:'working / live',stat_need:'need you',stat_today:'today',stat_total:'total (on disk)',stat_trend:'14-day trend',
   st_run:'working',st_wait:'waiting',st_old:'closed',
   aw_question:'choose options',aw_permission:'actions',aw_ask:'question',
-  no_sessions:'no sessions',last_reply:"agent's last reply",
+  no_sessions:'no sessions',last_reply:"agent's last reply",last_prompt:'last prompt',no_prompt:'— no prompt yet —',no_reply:'— no reply yet —',
+  injected_ok:'✅ Typed into the session console (PID %s) + Enter — same window, context kept. The reply appears in that console.',
   now:'just now',min:'min',hr:'h',day:'d',
   run_warn:'Control: from Telegram, on this PC (127.0.0.1), or <a href="#" onclick="login();return false" style="color:var(--orange);font-weight:700">🔓 log in</a>. Viewing works everywhere.',
   run_hint:'▶ if a session in the project is already waiting, your task is appended to it; otherwise a new window opens.<br>⚡ headless — a one-shot agent that closes itself; the answer comes to Telegram.',
@@ -210,7 +241,8 @@ const I18N={
   stat_wl:'работают / живых',stat_need:'ждут решения',stat_today:'сегодня',stat_total:'всего (на диске)',stat_trend:'динамика 14 дней',
   st_run:'работает',st_wait:'ждёт',st_old:'закрыта',
   aw_question:'выбор пунктов',aw_permission:'действия',aw_ask:'вопрос',
-  no_sessions:'нет сессий',last_reply:'последний ответ агента',
+  no_sessions:'нет сессий',last_reply:'последний ответ агента',last_prompt:'последний промт',no_prompt:'— промта ещё нет —',no_reply:'— ответа ещё нет —',
+  injected_ok:'✅ Впечатано в консоль сессии (PID %s) + Enter — то же окно, контекст цел. Ответ появится в этой консоли.',
   now:'только что',min:'мин',hr:'ч',day:'дн',
   run_warn:'Управление: из Telegram, прямо с ПК (127.0.0.1), или <a href="#" onclick="login();return false" style="color:var(--orange);font-weight:700">🔓 войти по паролю</a>. Просмотр работает везде.',
   run_hint:'▶ если в проекте уже есть сессия «ждёт» — допишу задачу в неё; иначе откроется новое окно.<br>⚡ headless — разовый агент, закроется сам, ответ придёт в Telegram.',
@@ -226,7 +258,8 @@ const I18N={
   stat_wl:'працюють / живих',stat_need:'чекають рішення',stat_today:'сьогодні',stat_total:'всього (на диску)',stat_trend:'динаміка 14 днів',
   st_run:'працює',st_wait:'очікує',st_old:'закрита',
   aw_question:'вибір пунктів',aw_permission:'дії',aw_ask:'питання',
-  no_sessions:'немає сесій',last_reply:'остання відповідь агента',
+  no_sessions:'немає сесій',last_reply:'остання відповідь агента',last_prompt:'останній промт',no_prompt:'— промту ще немає —',no_reply:'— відповіді ще немає —',
+  injected_ok:'✅ Вписано в консоль сесії (PID %s) + Enter — те саме вікно, контекст цілий. Відповідь з’явиться в цій консолі.',
   now:'щойно',min:'хв',hr:'год',day:'дн',
   run_warn:'Керування: з Telegram, прямо з ПК (127.0.0.1), або <a href="#" onclick="login();return false" style="color:var(--orange);font-weight:700">🔓 увійти за паролем</a>. Перегляд працює всюди.',
   run_hint:'▶ якщо в проєкті вже є сесія «очікує» — допишу завдання в неї; інакше відкриється нове вікно.<br>⚡ headless — разовий агент, закриється сам, відповідь прийде в Telegram.',
@@ -304,6 +337,7 @@ async function tick(){
       resp+
       '</div></div>';
   }).join('') || '<div class="muted">'+t('no_sessions')+'</div>';
+  refreshOpenSheet(order);   // живое обновление открытой шторки (последний ответ/статус)
 }
 function st(n,l){return '<div class="stat"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'}
 
@@ -367,9 +401,8 @@ async function run(action){
   document.getElementById('b-new').disabled=false; document.getElementById('b-head').disabled=false;
 }
 
-function openSheet(sid){
-  const s=(window._sess||[]).find(x=>x.session_id===sid); if(!s)return;
-  window._cur=s;
+// Заполнить/обновить содержимое шторки (можно звать повторно — для live-обновления).
+function renderSheet(s){
   const [emo,nm]=splitEmoji(s.project);
   document.getElementById('sh-proj').textContent=emo+' '+nm;
   const st=s.status||'old';
@@ -378,20 +411,45 @@ function openSheet(sid){
   stEl.textContent=stLabel(st)+(s.awaiting?(' · '+(AWL[s.awaiting]||'')):'');
   stEl.className='s-st '+st;
   document.getElementById('sh-task').textContent=s.title;
+  // последний промт + последний ответ на него
+  const p=(s.last_user_text||s.last_prompt||'').trim();
+  const r=(s.last_response||'').trim();
+  const lp=document.getElementById('sh-lastprompt'), lr=document.getElementById('sh-lastreply');
+  lp.textContent=p||t('no_prompt'); lp.classList.toggle('empty',!p);
+  lr.textContent=r||t('no_reply'); lr.classList.toggle('empty',!r);
   const h=s.history||[];
   document.getElementById('sh-hist').innerHTML = h.length
     ? h.slice().reverse().map((x,i)=>'<div class="h-row" onclick="useHist('+(h.length-1-i)+')"><span class="h-n">'+(h.length-i)+'</span><span class="h-t">'+esc(x.title)+'</span></div>').join('')
-    : '<div class="muted" style="font-size:12px;padding:2px">нет истории</div>';
+    : '<div class="muted" style="font-size:12px;padding:2px">'+t('no_sessions')+'</div>';
+}
+function sheetOpen(){ return document.getElementById('sheet').classList.contains('on'); }
+function openSheet(sid){
+  const s=(window._sess||[]).find(x=>x.session_id===sid); if(!s)return;
+  window._cur=s; window._curSid=sid;
+  renderSheet(s);
   document.getElementById('sh-prompt').value='';
-  document.getElementById('sh-chat').innerHTML = s.last_response
-    ? '<div class="msg a"><b>'+t('last_reply')+'</b><br>'+esc(s.last_response).replace(/\n/g,'<br>')+'</div>' : '';
+  document.getElementById('sh-chat').innerHTML='';
+  const sc=document.querySelector('.sheet-scroll'); if(sc) sc.scrollTop=0;
   const sht=document.getElementById('sh-toast'); sht.className='toast';
   document.getElementById('sh-warn').classList.toggle('hidden', canControl);
   document.getElementById('sheet').classList.add('on');
+  showBack(true);
   // открыли карточку — отметить ответ просмотренным (снять «новый ответ»)
   if(s.unread){ fetch('./api/seen',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({initData,session_id:sid})}).catch(()=>{}); s.unread=false; }
   if(tg&&tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+}
+// Пока шторка открыта — тянуть свежий последний ответ/статус (live), не трогая поле ввода.
+function refreshOpenSheet(order){
+  if(!window._curSid || !sheetOpen()) return;
+  const fresh=(order||window._sess||[]).find(x=>x.session_id===window._curSid);
+  if(fresh){ window._cur=fresh; renderSheet(fresh); }
+}
+// Кнопка «Назад» Telegram закрывает шторку (нативный жест «назад» на телефоне).
+function showBack(on){
+  if(!tg||!tg.BackButton) return;
+  try{ if(on){ tg.BackButton.show(); tg.BackButton.onClick(closeSheet); }
+       else { tg.BackButton.offClick(closeSheet); tg.BackButton.hide(); } }catch(e){}
 }
 function useHist(i){
   const s=window._cur; if(!s||!s.history||!s.history[i])return;
@@ -417,7 +475,7 @@ async function sendChat(){
     wait.textContent = j.ok ? (j.response||'(пусто)') : ('❌ '+(j.error||'ошибка'));
   }catch(e){ wait.textContent='❌ сеть/таймаут (длинный ответ может прийти позже)'; }
 }
-function closeSheet(){ document.getElementById('sheet').classList.remove('on'); }
+function closeSheet(){ document.getElementById('sheet').classList.remove('on'); window._curSid=null; showBack(false); }
 async function sheetAction(action){
   const s=window._cur; if(!s)return;
   const t=document.getElementById('sh-toast');

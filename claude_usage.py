@@ -40,12 +40,17 @@ import config
 # ----------------------------------------------------------------------------
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
+# Живые сессии: их пишет сам CLI (по файлу на pid). Это МГНОВЕННЫЙ и надёжный
+# источник pid+статуса открытых окон — в отличие от `claude agents --json`,
+# который на загруженном ПК отвечает по 20-30 с (и тогда pid терялся, а «написать
+# в сессию» уходило в headless-resume вместо впечатывания в то же окно).
+SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 DATA_DIR = Path(__file__).parent / "data"
 CACHE_FILE = DATA_DIR / "parse_cache.json"
 DAILY_FILE = DATA_DIR / "daily_totals.json"
 # Версия схемы кэша парсинга. Меняй при изменении формы agg, чтобы старый
 # parse_cache.json не отдавал записи без новых полей (last_assistant_stop и т.п.).
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 
 # Сессия считается «активной» (агент работает прямо сейчас), если её транскрипт
 # писался не позже чем ACTIVE_SECONDS назад.
@@ -189,6 +194,7 @@ def _blank_agg():
         "version": "",
         "ai_title": "",
         "last_prompt": "",
+        "last_user_text": "",         # ПОЛНЫЙ текст последнего запроса пользователя (не первая строка)
         "last_assistant_stop": None,  # stop_reason последнего ответа: tool_use|end_turn|...
         "last_assistant_text": "",    # текст последнего ответа агента (показать по клику)
         "last_assistant_ts": None,    # время последнего ответа агента
@@ -199,8 +205,14 @@ def _blank_agg():
 
 
 def _is_real_user_prompt(obj: dict) -> bool:
-    """Отличить настоящий запрос пользователя от tool_result (тоже role=user)."""
+    """Отличить настоящий запрос пользователя от tool_result (тоже role=user).
+
+    isMeta-записи — это служебные вставки самого CLI (спутники изображений
+    «[Image: original …]», caveat'ы, вывод команд), а не то, что печатал человек.
+    Их выкидываем: иначе они засоряют историю и «последний промт»."""
     if obj.get("type") != "user":
+        return False
+    if obj.get("isMeta"):
         return False
     content = (obj.get("message") or {}).get("content")
     if isinstance(content, str):
@@ -310,6 +322,12 @@ def _process_line(line: str, agg: dict):
         ts = obj.get("timestamp")
         agg["last_kind"] = "user_prompt"
         agg["pending_tools"] = None   # новый запрос пользователя снимает «висящий» вопрос
+        # полный последний ЧЕЛОВЕЧЕСКИЙ промт (для карточки сессии): только если это
+        # реальное сообщение, а не служебная вставка (<task-notification>, caveat, …),
+        # иначе автособытие затирало бы последний настоящий запрос пользователя.
+        _cmd = _human_command(text)
+        if _cmd:
+            agg["last_user_text"] = (_cmd if _cmd.startswith("/") else text.strip())[:2000]
         agg["tasks"].append({
             "title": _first_line(text) or "(задача)",
             "user_text": _first_line(text, 110),   # сырой текст запроса (для истории)
@@ -462,7 +480,75 @@ def _save_json(path: Path, obj):
 
 
 # ----------------------------------------------------------------------------
-# Живые сессии — источник правды о статусе (`claude agents --json`)
+# Живые сессии — источник правды о статусе.
+# Первично: ~/.claude/sessions/<pid>.json (пишет сам CLI, читается мгновенно).
+# Фолбэк (старый CLI без sessions/): `claude agents --json`.
+# ----------------------------------------------------------------------------
+
+def _pid_alive(pid: int) -> bool:
+    """Жив ли процесс — через OpenProcess, без внешних зависимостей (Windows).
+    На не-Windows считаем живым (там sessions/ обычно нет, идём в фолбэк)."""
+    if not pid or pid <= 0:
+        return False
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x1000, False, int(pid))   # QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if k32.GetExitCodeProcess(h, ctypes.byref(code)):
+                return code.value == 259               # STILL_ACTIVE
+            return True
+        finally:
+            k32.CloseHandle(h)
+    except Exception:
+        return True
+
+
+def _sessions_from_disk():
+    """Карта {sid: {status, pid, cwd, kind, startedAt}} живых интерактивных сессий
+    из ~/.claude/sessions/*.json, или None если папки нет (старый CLI → фолбэк).
+
+    status — сырой статус CLI: busy | idle | waiting | shell. Мёртвые сессии
+    (файл остался, процесс закрыт) отсеиваются проверкой pid. Возврат — та же
+    форма, что и у `claude agents --json`, поэтому scan() ниже не меняется."""
+    if not SESSIONS_DIR.is_dir():
+        return None
+    out = {}
+    for f in SESSIONS_DIR.glob("*.json"):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        pid = int(d.get("pid") or 0)
+        sid = d.get("sessionId") or ""
+        if not sid or not _pid_alive(pid):
+            continue
+        out[sid] = {"status": (d.get("status") or "").lower(),
+                    "pid": pid, "cwd": d.get("cwd") or "",
+                    "kind": d.get("kind") or "interactive",
+                    "startedAt": d.get("startedAt")}
+    return out
+
+
+def live_pid_status(sid: str):
+    """(pid, cli_status) живой сессии по её id из sessions/ — БЕЗ полного scan().
+    Для «впечатать в окно» нужен только pid; читаем мгновенно. (None, None) —
+    сессия не найдена/закрыта."""
+    if not sid:
+        return None, None
+    disk = _sessions_from_disk()
+    if disk and sid in disk:
+        return disk[sid]["pid"], disk[sid]["status"]
+    return None, None
+
+
+# ----------------------------------------------------------------------------
+# Живые сессии — фолбэк через `claude agents --json`
 # ----------------------------------------------------------------------------
 
 # Path to the `claude` CLI for the live-sessions query. On Windows shutil.which
@@ -623,8 +709,15 @@ def mark_seen(sid: str, ts: str | None = None):
 
 def scan(use_cache: bool = True, use_agents: bool = True) -> dict:
     now = time.time()
-    # Живые сессии (правда о статусе): {sid: {...}} или None, если claude недоступен.
-    agents = live_agents() if use_agents else None
+    # Живые сессии (правда о статусе): {sid: {...}} или None.
+    # Первично — мгновенный снимок из ~/.claude/sessions/ (pid+статус пишет сам CLI).
+    # Только если этой папки нет (старый CLI) — медленный фолбэк claude agents --json.
+    if use_agents:
+        agents = _sessions_from_disk()
+        if agents is None:
+            agents = live_agents()
+    else:
+        agents = None
     seen = _load_json(SEEN_FILE, {})   # отметки «просмотрено» для флага «непрочитано»
     cache = _load_json(CACHE_FILE, {}) if use_cache else {}
     # схема агрегата меняется — сбрасываем кэш при несовпадении версии
@@ -662,7 +755,7 @@ def scan(use_cache: bool = True, use_agents: bool = True) -> dict:
             sessions[sid] = {
                 "session_id": sid,
                 "project": "", "project_path": "",
-                "title": "", "last_prompt": "",
+                "title": "", "last_prompt": "", "last_user_text": "",
                 "by_model": {}, "by_date": {},
                 "msg_count": 0, "first_ts": None, "last_ts": None,
                 "mtime": 0, "subagents": 0, "subagent_tokens": 0,
@@ -718,6 +811,8 @@ def scan(use_cache: bool = True, use_agents: bool = True) -> dict:
                 s["title"] = agg["ai_title"]
             if agg.get("last_prompt"):
                 s["last_prompt"] = agg["last_prompt"]
+            if agg.get("last_user_text"):
+                s["last_user_text"] = agg["last_user_text"]
             if agg.get("last_assistant_stop"):
                 s["last_assistant_stop"] = agg["last_assistant_stop"]
             if agg.get("last_assistant_text"):
@@ -776,7 +871,8 @@ def scan(use_cache: bool = True, use_agents: bool = True) -> dict:
                 live, status = False, "old"
             elif ag.get("status") == "idle":
                 live, status = True, "wait"
-            elif ag.get("status") == "busy":
+            elif ag.get("status") in ("busy", "shell"):
+                # busy = думает; shell = выполняет команду в оболочке — это работа.
                 live, status = True, "run"
             elif ag.get("status") == "waiting":
                 # waiting = агент ВЫПОЛНЯЕТ инструмент (напр. долгий PowerShell/Bash)
@@ -868,6 +964,10 @@ def scan(use_cache: bool = True, use_agents: bool = True) -> dict:
             "last_stop": stop,
             "awaiting": awaiting,              # question|permission|ask|None — ждёт твоего решения
             "awaiting_detail": awaiting_detail,
+            # последний промт пользователя. _human_command нормализует значение:
+            # обычный текст → он же (полностью), слэш-тег → «/clear», служебное → None.
+            # Если из кэша не вышло чистого — берём lastPrompt самого CLI.
+            "last_user_text": ((_human_command(s.get("last_user_text") or "") or s.get("last_prompt") or ""))[:2000],
             "last_response": last_text[:1500],  # последний ответ агента (показать по клику)
             "unread": unread,                  # есть свежий ответ, ещё не просмотрен
             "subagents": s["subagents"],
@@ -979,7 +1079,8 @@ def running_processes() -> dict:
     try:
         import subprocess
         r = subprocess.run(["tasklist", "/fo", "csv", "/nh"],
-                           capture_output=True, text=True, timeout=2.5)
+                           capture_output=True, text=True, timeout=2.5,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))  # без окна: процесс живёт под pythonw
         for line in r.stdout.splitlines():
             low = line.lower()
             if '"claude' in low:

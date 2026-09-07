@@ -127,6 +127,34 @@ def start_session(path: str, task: str, name: str = "session") -> str:
     return sid
 
 
+def resume_in_console(name: str, sid: str, path: str, prompt: str) -> None:
+    """Сессия закрыта (окна нет) → открыть НОВОЕ видимое окно `claude --resume <sid>`
+    в том же проекте и ВПЕЧАТАТЬ туда промт (как будто пользователь набрал и нажал
+    Enter). Не headless: пользователь видит ту же сессию в консоли, как и просил.
+
+    Окно поднимается асинхронно; как только CLI запишет свой sessions/<pid>.json с
+    этим sid — впечатываем текст. Résumé переиспользует тот же sid, поэтому контекст
+    цел, а окно живёт (в отличие от `-p`, которое отработало бы и закрылось)."""
+    cwd = path if (path and os.path.isdir(path)) else None
+    loc = f"Set-Location -LiteralPath '{_ps_lit(path)}'; " if cwd else ""
+    # без -NoExit: при выходе из claude окно закроется само (нет зомби)
+    ps = f"{loc}& '{CLAUDE}' --resume {sid} -n '{_ps_lit(name)[:40]}'"
+    subprocess.Popen(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+        creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0), close_fds=True)
+
+    def _worker():
+        # ждём, пока откроется окно и CLI зарегистрирует сессию (pid в sessions/)
+        for _ in range(60):                       # до ~60 с
+            time.sleep(1)
+            pid, _st = session_live_pid(sid)
+            if pid:
+                time.sleep(1.5)                   # дать REPL встать на чтение stdin
+                terminal_inject.send_to_terminal(pid, prompt)
+                return
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 def find_session(path: str, statuses):
     """Найти сессию проекта в одном из статусов (самую свежую). Для «дописать в ждущую»."""
     try:
@@ -141,17 +169,20 @@ def find_session(path: str, statuses):
 
 def session_live_pid(sid: str):
     """(pid, status) живой сессии по её id, или (None, None). PID есть только у
-    открытых окон (claude agents) — тогда можно ВПЕЧАТАТЬ ход прямо в терминал."""
+    открытых окон — тогда можно ВПЕЧАТАТЬ ход прямо в терминал.
+
+    Читаем МГНОВЕННО из ~/.claude/sessions/ (не гоняем полный scan на каждый Send).
+    status приводим к «run/wait»: busy|shell|waiting=работает, idle=ждёт ввода."""
     if not sid:
         return None, None
     try:
-        snap = cu.scan()
+        pid, cli = cu.live_pid_status(sid)
     except Exception:
         return None, None
-    for s in snap["sessions"]:
-        if s.get("session_id") == sid:
-            return s.get("pid"), s.get("status")
-    return None, None
+    if not pid:
+        return None, None
+    status = "wait" if cli == "idle" else "run"
+    return pid, status
 
 
 def inject_live(sid: str, prompt: str):
@@ -176,7 +207,8 @@ def _claude_ps(cwd, mid: str, prompt: str, timeout: int = 1800) -> str:
         r = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
             cwd=cwd, env=env, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=timeout)
+            encoding="utf-8", errors="replace", timeout=timeout,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         out = (r.stdout or "").strip()
         if r.returncode != 0 and r.stderr and r.stderr.strip():
             out += "\n\n[stderr]\n" + r.stderr.strip()
@@ -246,7 +278,8 @@ def run_vps_headless(name: str, prompt: str, model: str = "sonnet"):
         cmd = _ssh_base() + [f"{user}@{host}", _vps_wrap(inner)]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True,
-                               encoding="utf-8", errors="replace", timeout=1800)
+                               encoding="utf-8", errors="replace", timeout=1800,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             out = (r.stdout or "").strip()
             if not out and r.stderr and r.stderr.strip():
                 out = "[stderr] " + r.stderr.strip()
@@ -271,7 +304,8 @@ def kill_vps_sessions() -> str:
     cmd = _ssh_base() + [f"{user}@{host}", f"bash -lc {shlex.quote(inner)}"]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=30)
+                           encoding="utf-8", errors="replace", timeout=30,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         out = (r.stdout or "").strip()
         return out.split("killed:")[-1].strip() if "killed:" in out else "?"
     except Exception as e:
@@ -434,8 +468,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"ok": True, "injected": False,
                         "response": "⚠ Не удалось впечатать в окно (%s). "
                                     "Окно сессии закрыто? Попробуй ещё раз." % msg})
-                out = _claude_ps(cwd, f"--resume '{sid}'", prompt, timeout=110)
-                return self._json({"ok": True, "response": out})
+                # окна нет — открываем видимую консоль (resume) и печатаем туда
+                resume_in_console(name or "session", sid, path_, prompt)
+                return self._json({"ok": True, "injected": False,
+                    "response": "🖥 Сессия была закрыта — открываю её консоль заново "
+                                "(claude --resume) и впечатываю сообщение в неё. Ответ "
+                                "появится в самом окне сессии на ПК."})
             except Exception as e:
                 return self._json({"ok": False, "error": str(e)}, 500)
         action = data.get("action")
@@ -507,8 +545,8 @@ class Handler(BaseHTTPRequestHandler):
                     pid, msg = info
                     self._json({"ok": False, "error": f"не удалось впечатать в окно ({msg}) — окно закрыто?"}, 502)
                 elif action == "continue":
-                    run_resume_async(name, sid, cwd, "продолжение", prompt, True)
-                    self._json({"ok": True, "msg": f"Сессия закрыта — отправил через resume в «{name}», ответ придёт в Telegram."})
+                    resume_in_console(name, sid, cwd or path_, prompt)
+                    self._json({"ok": True, "msg": f"🖥 Сессия «{name}» была закрыта — открываю её консоль заново (resume) и впечатываю сообщение. Ответ — в окне сессии на ПК."})
                 else:
                     run_resume_async(name, sid, cwd, action, prompt, False)
                     self._json({"ok": True, "msg": f"Сессия закрыта — {prompt} через resume в «{name}», результат в Telegram."})
