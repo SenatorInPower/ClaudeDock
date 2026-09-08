@@ -7,6 +7,8 @@ PC-сервер (stdlib). Отдаёт:
   GET  /cu/<token>/api/projects     — недавние проекты для запуска
   POST /cu/<token>/api/run          — управление: новая сессия / headless
                                       (требует подписи Telegram initData = владелец)
+  POST /cu/<token>/api/upload       — вложение: файл кладётся на ПК, путь уходит в промт
+  GET  /cu/<token>/api/file?id=…    — отдать доставленный файл обратно (превью)
 
 Снаружи доступен через reverse-туннель PC:8765 -> VPS, nginx проксирует /cu/.
 Управление защищено двойным фактором: секретный токен в пути + проверка
@@ -19,6 +21,7 @@ import hashlib
 import hmac
 import base64
 import json
+import mimetypes
 import os
 import shlex
 import shutil
@@ -29,7 +32,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qsl, urlparse
+from urllib.parse import parse_qsl, quote, urlparse
 
 sys.path.insert(0, str(Path(__file__).parent))
 import claude_usage as cu
@@ -50,6 +53,65 @@ WEB_PASSWORD = config.get("web_password")   # optional: password login for remot
 WEB_TRUST_KEY = config.get("web_trust_key")  # a reverse proxy behind its OWN auth (e.g. nginx htpasswd) sends
 VPS = config.get("vps") or {}               # optional: launch/connect a session on a remote server over SSH
                                              # header X-ClaudeDock-Auth: <key> to vouch for the request -> control
+
+
+# ---------------------------------------------------------------------------
+# Attachments delivered from the phone
+#
+# The point is not to show a picture in the web page: it is to put the file on
+# the PC and hand the agent a path it can open. So an upload lands in data/inbox
+# and /api/chat is sent the absolute path along with the text.
+# ---------------------------------------------------------------------------
+INBOX = ROOT / "data" / "inbox"
+MAX_UPLOAD = 25 * 1024 * 1024        # nginx /cu/ is set to the same 25M
+INBOX_KEEP_DAYS = 30
+
+
+def _safe_name(name: str) -> str:
+    """A file name safe to write on Windows and safe to type into a console."""
+    base = os.path.basename((name or "").replace("\\", "/")).strip()
+    stem, ext = os.path.splitext(base)
+    clean = lambda t: "".join(c if (c.isalnum() or c in "._-") else "_" for c in t)
+    stem = clean(stem).strip("._")[:48] or "file"
+    ext = clean(ext).lower()[:12]
+    return stem + ext
+
+
+def _prune_inbox(days: int = INBOX_KEEP_DAYS) -> None:
+    """Drop day folders older than `days` — the inbox is a hand-off, not an archive."""
+    cutoff = time.time() - days * 86400
+    try:
+        for d in INBOX.iterdir():
+            if d.is_dir() and d.stat().st_mtime < cutoff:
+                shutil.rmtree(d, ignore_errors=True)
+    except OSError:
+        pass
+
+
+def save_attachment(raw: bytes, filename: str) -> dict:
+    """Write one delivered file into the inbox and say where it landed."""
+    day = time.strftime("%Y-%m-%d")
+    folder = INBOX / day
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = "%s_%s" % (time.strftime("%H%M%S"), uuid.uuid4().hex[:4])
+    f = folder / ("%s_%s" % (stamp, _safe_name(filename)))
+    f.write_bytes(raw)
+    _prune_inbox()
+    return {"name": f.name, "id": day + "/" + f.name, "path": str(f), "size": len(raw)}
+
+
+def inbox_file(fid: str):
+    """Resolve an inbox id (`<day>/<name>`) to a real file inside the inbox."""
+    parts = (fid or "").split("/")
+    if len(parts) != 2 or any((not x) or x in (".", "..") or "\\" in x for x in parts):
+        return None
+    try:
+        f = (INBOX / parts[0] / parts[1]).resolve()
+        if f.is_file() and INBOX.resolve() in f.parents:
+            return f
+    except OSError:
+        pass
+    return None
 
 
 def _session_value():
@@ -442,6 +504,20 @@ class Handler(BaseHTTPRequestHandler):
                                     "label": VPS.get("label") or "🖥 VPS"}})
             except Exception as e:
                 self._json({"error": str(e)}, 500)
+        elif sub == "/api/file":
+            # Give a delivered file back so the phone can see what it sent. Guarded
+            # like the rest of the page: the id is unguessable and only reachable
+            # under the secret /cu/<token>/ path (same footing as /api/usage).
+            fid = dict(parse_qsl(urlparse(self.path).query)).get("id", "")
+            f = inbox_file(fid)
+            if f is None:
+                self._send(404, "not found", "text/plain")
+                return
+            ctype = mimetypes.guess_type(f.name)[0] or "application/octet-stream"
+            try:
+                self._send(200, f.read_bytes(), ctype)
+            except OSError as e:
+                self._send(500, str(e), "text/plain")
         elif sub == "/api/auth":
             # can THIS request control? (loopback / password cookie). Telegram is
             # checked client-side via initData. password_enabled tells the UI to
@@ -453,9 +529,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
         sub = path[len(BASE):].rstrip("/") if path.startswith(BASE) else ""
-        if sub not in ("/api/run", "/api/chat", "/api/seen", "/api/login"):
+        if sub not in ("/api/run", "/api/chat", "/api/seen", "/api/login", "/api/upload"):
             self._send(404, "not found", "text/plain")
             return
+        if sub == "/api/upload":
+            # The body is the file itself, so it cannot be parsed as JSON below.
+            return self._upload()
         try:
             length = int(self.headers.get("Content-Length", "0"))
             data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
@@ -603,6 +682,45 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "error": "неизвестное действие"}, 400)
         except Exception as e:
             self._json({"ok": False, "error": str(e)}, 500)
+
+    def _upload(self):
+        """Take one file from the phone and put it on this PC.
+
+        Raw body, no multipart and no base64: the name rides in the query string
+        and the Telegram signature in a header, so a 20 MB photo goes through the
+        tunnel as-is instead of a third larger.
+        """
+        user = verify_init_data(self.headers.get("X-CD-Init", ""))
+        if not self._authed(user):
+            return self._json({"ok": False, "error": "не авторизовано"}, 403)
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0:
+            return self._json({"ok": False, "error": "пустой файл"}, 400)
+        if length > MAX_UPLOAD:
+            # Do not read the body we are refusing; the socket goes with it.
+            self.close_connection = True
+            return self._json({"ok": False,
+                               "error": "файл больше %d МБ" % (MAX_UPLOAD // 1048576)}, 413)
+        chunks, got = [], 0
+        while got < length:
+            part = self.rfile.read(min(65536, length - got))
+            if not part:
+                break
+            chunks.append(part)
+            got += len(part)
+        if got != length:
+            return self._json({"ok": False, "error": "передача оборвалась"}, 400)
+        name = dict(parse_qsl(urlparse(self.path).query)).get("name", "")
+        try:
+            info = save_attachment(b"".join(chunks), name)
+        except OSError as e:
+            return self._json({"ok": False, "error": str(e)}, 500)
+        info["ok"] = True
+        info["url"] = BASE + "/api/file?id=" + quote(info["id"])
+        return self._json(info)
 
     def log_message(self, *a):
         pass

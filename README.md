@@ -52,6 +52,7 @@ Who's working, who's waiting on you, who just replied — one look. Costs **0 ex
 - ❓ **"Needs your decision" detection.** It spots when a session is blocked on a multiple‑choice question (`AskUserQuestion`), a permission prompt, or ended its turn with a question — and badges it ❓/⚠.
 - 🔴 **Never miss a reply.** A red dot marks sessions that answered while you were away. Click to read the last response; the dot clears.
 - ↩️ **Jump back in from anywhere.** Write a follow‑up into the *same* session (full context preserved) from desktop, browser, or phone.
+- 📎 **Send a file to the agent.** Attach a photo or document next to *Send*: it is uploaded to the machine ClaudeDock runs on, and the message carries the path it landed on — so the agent just opens it.
 - 📊 **Exact token & cost accounting.** Per‑model input/output/cache tokens and $ cost, today / 7‑day / all‑time — summed from local transcripts.
 - 🧩 **Subagents folded in.** Task‑tool subagents show as a badge on their parent, not as noise.
 - 🪙 **0 extra tokens.** It reads `~/.claude` transcripts + the `claude agents` CLI. It never calls the model.
@@ -141,6 +142,31 @@ ClaudeDock watches the sessions **on the machine it runs on**, so it's self‑ho
 3. **Telegram Mini App.** Control locked to your Telegram user id via signed `initData`. See `run_webapp.example.ps1`.
 
 > 🔑 Rule of thumb: **viewing** can be shared; **control** stays with you (loopback, password, or Telegram). Want a teammate to drive *their* agents? They run their own ClaudeDock.
+
+## 📎 Send a file to the agent
+
+The paperclip beside **Send** takes a photo or a document from the phone you are holding and puts it on
+the machine the agent is running on — `data/inbox/<date>/<time>_<name>` — then appends the paths to the
+message:
+
+```
+look at this crash
+
+[attached files]
+D:\ClaudeDock\data\inbox\2026-09-08\155817_97c5_screenshot.png
+```
+
+The agent reads it straight off the disk; nothing is uploaded to a third party. On a desktop, Ctrl+V in
+the message box attaches a screenshot the same way. Files are kept for 30 days, then the day's folder is
+dropped. Cap is 25 MB per file — **if you front ClaudeDock with nginx, raise the matching limit**, or the
+upload dies at the proxy before it ever reaches the app:
+
+```nginx
+location /cu/ {
+    client_max_body_size 25M;
+    proxy_pass http://127.0.0.1:9099;
+}
+```
 
 ## 🚀 Launch agents on a VPS (headless, pick the model)
 

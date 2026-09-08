@@ -110,6 +110,18 @@ textarea{width:100%;min-height:96px;background:var(--card);border:1px solid var(
   border-top:1px solid var(--line);background:var(--card2)}
 .sheet-task{margin:0 0 12px;font-size:13px;color:var(--dim)}
 .sheet-row{display:flex;gap:9px;margin-bottom:0}
+/* вложения: что уже доставлено на ПК и уйдёт путями в сообщение */
+.atts{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.atts:empty{display:none}
+.att{display:flex;align-items:center;gap:6px;max-width:100%;padding:5px 8px;border-radius:10px;
+  background:var(--card);border:1px solid var(--line);font-size:12px}
+.att.pend{opacity:.55}
+.att img{width:26px;height:26px;object-fit:cover;border-radius:6px;display:block}
+.att .nm{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.att .sz{color:var(--dim)}
+.att .x{cursor:pointer;color:var(--dim);font-weight:700;padding:0 2px}
+.att .x:active{color:var(--orange)}
+.btn.clip{flex:0 0 auto;min-width:54px;font-size:18px;padding:13px 10px}
 .chat{margin:8px 0 2px;display:flex;flex-direction:column;gap:7px}
 /* последний промт + последний ответ на него */
 .qa{margin:2px 0 10px}
@@ -200,8 +212,13 @@ textarea{width:100%;min-height:96px;background:var(--card);border:1px solid var(
         <button class="btn s" onclick="sheetAction('compact')">🗜 Compact</button>
         <button class="btn s" onclick="sheetAction('clear')">🧹 Clear</button>
       </div>
+      <div class="atts" id="sh-files"></div>
       <textarea id="sh-prompt" data-i18n-ph="prompt_ph" placeholder="Message the session — like in the console (reply lands here)…"></textarea>
-      <button class="btn p" style="width:100%;margin-top:10px" onclick="sendChat()" data-i18n="send">▶ Send</button>
+      <div class="sheet-row" style="margin-top:10px">
+        <button class="btn s clip" onclick="pickFiles()" title="Прикрепить файл — он ляжет на ПК, путь уйдёт в сообщение">📎</button>
+        <button class="btn p" onclick="sendChat()" data-i18n="send">▶ Send</button>
+      </div>
+      <input type="file" id="sh-file" multiple style="display:none" onchange="onPick(this.files)">
       <div class="toast" id="sh-toast"></div>
     </div>
   </div>
@@ -460,12 +477,55 @@ function addMsg(cls, text){
   const d=document.createElement('div'); d.className='msg '+cls; d.textContent=text;
   chat.appendChild(d); chat.scrollTop=chat.scrollHeight; return d;
 }
+// ---- вложения ------------------------------------------------------------
+// Смысл не «показать картинку в вебе», а положить файл НА ПК: агент читает его
+// с диска, поэтому в сообщение уходит путь, по которому файл реально лёг.
+let att=[];                       // [{name,size,path,url,pending}]
+function pickFiles(){ document.getElementById('sh-file').click(); }
+function fmtSize(n){ return n>=1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(n/1024))+' KB'; }
+async function onPick(files){
+  for(const f of files) await upload(f);
+  document.getElementById('sh-file').value='';
+}
+function renderAtt(){
+  const box=document.getElementById('sh-files'); if(!box) return;
+  box.innerHTML='';
+  att.forEach((a,i)=>{
+    const d=document.createElement('div'); d.className='att'+(a.pending?' pend':'');
+    const pic=a.url && /\.(png|jpe?g|gif|webp|bmp|heic)$/i.test(a.name||'');
+    d.innerHTML=(pic?'<img src="'+a.url+'">':'<span>📄</span>')
+      +'<span class="nm">'+esc(a.name||'')+'</span>'
+      +'<span class="sz">'+(a.pending?'…':fmtSize(a.size))+'</span>';
+    const x=document.createElement('span'); x.className='x'; x.textContent='✕';
+    x.onclick=()=>{ att.splice(i,1); renderAtt(); };
+    d.appendChild(x); box.appendChild(d);
+  });
+}
+async function upload(f){
+  if(!canControl){ addMsg('sys','Управление — из Telegram или прямо на ПК (127.0.0.1:8765)'); return; }
+  if(f.size>25*1024*1024){ addMsg('sys','❌ '+f.name+' — больше 25 МБ'); return; }
+  const item={name:f.name,size:f.size,pending:true}; att.push(item); renderAtt();
+  try{
+    const r=await fetch('./api/upload?name='+encodeURIComponent(f.name),{method:'POST',
+      headers:{'X-CD-Init':initData,'Content-Type':'application/octet-stream'},body:f});
+    const j=await r.json();
+    if(!j.ok) throw new Error(j.error||'ошибка');
+    item.name=j.name; item.path=j.path; item.url=j.url; item.size=j.size; item.pending=false;
+  }catch(e){ att=att.filter(x=>x!==item); addMsg('sys','❌ '+f.name+': '+(e.message||'сеть')); }
+  renderAtt();
+}
 async function sendChat(){
   const s=window._cur; if(!s)return;
-  const ta=document.getElementById('sh-prompt'); const prompt=ta.value.trim();
+  const ta=document.getElementById('sh-prompt'); let prompt=ta.value.trim();
   if(!canControl){ addMsg('sys','Управление — из Telegram или прямо на ПК (127.0.0.1:8765)'); return; }
-  if(!prompt){ return; }
-  addMsg('u', prompt); ta.value='';
+  if(att.some(a=>a.pending)){ addMsg('sys','⏳ файл ещё загружается'); return; }
+  const files=att.filter(a=>a.path);
+  if(!prompt && !files.length){ return; }
+  if(files.length){
+    // Путь, а не имя с телефона: агент открывает файл ровно там, куда он лёг.
+    prompt=(prompt?prompt+'\n\n':'')+'[attached files]\n'+files.map(a=>a.path).join('\n');
+  }
+  addMsg('u', prompt); ta.value=''; att=[]; renderAtt();
   const wait=addMsg('a','…');
   if(tg&&tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
   try{
@@ -475,7 +535,8 @@ async function sendChat(){
     wait.textContent = j.ok ? (j.response||'(пусто)') : ('❌ '+(j.error||'ошибка'));
   }catch(e){ wait.textContent='❌ сеть/таймаут (длинный ответ может прийти позже)'; }
 }
-function closeSheet(){ document.getElementById('sheet').classList.remove('on'); window._curSid=null; showBack(false); }
+function closeSheet(){ document.getElementById('sheet').classList.remove('on'); window._curSid=null;
+  att=[]; renderAtt(); showBack(false); }
 async function sheetAction(action){
   const s=window._cur; if(!s)return;
   const t=document.getElementById('sh-toast');
@@ -509,5 +570,9 @@ async function login(){
     else { alert('❌ '+(j.error||'неверный пароль')); }
   }catch(e){ alert('❌ сеть'); }
 }
+document.getElementById('sh-prompt').addEventListener('paste',e=>{
+  const f=[...((e.clipboardData&&e.clipboardData.files)||[])];
+  if(f.length){ e.preventDefault(); onPick(f); }
+});
 applyI18n(); refreshAuth(); tick(); setInterval(tick,3000);
 </script></body></html>
