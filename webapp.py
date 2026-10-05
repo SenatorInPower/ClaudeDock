@@ -25,6 +25,7 @@ import mimetypes
 import os
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -35,7 +36,8 @@ from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlparse
 
 sys.path.insert(0, str(Path(__file__).parent))
-import claude_usage as cu
+import agent_usage as cu
+import codex_usage
 import config
 import terminal_inject
 from tg import send as tg_send, TOKEN as BOT_TOKEN, CHAT_ID
@@ -224,7 +226,7 @@ def find_session(path: str, statuses):
     except Exception:
         return None
     cand = [s for s in snap["sessions"]
-            if s.get("project_path") == path and s.get("status") in statuses]
+            if s.get("provider", "claude") == "claude" and s.get("project_path") == path and s.get("status") in statuses]
     cand.sort(key=lambda s: s.get("age_sec", 1e9))
     return cand[0] if cand else None
 
@@ -427,6 +429,15 @@ def start_vps_session(model: str = "sonnet") -> None:
 # ---------------------------------------------------------------------------
 # HTTP
 # ---------------------------------------------------------------------------
+class LocalHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, body, ctype="application/json; charset=utf-8", cookie=None):
         if isinstance(body, str):
@@ -494,7 +505,22 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, html, "text/html; charset=utf-8")
         elif sub == "/api/usage":
             try:
-                self._json(cu.scan())
+                query = dict(parse_qsl(urlparse(self.path).query))
+                provider = query.get("provider", "all")
+                snapshot = cu.scan()
+                if provider != "all":
+                    if provider not in snapshot["providers"]:
+                        return self._json({"error": "Unknown provider"}, 400)
+                    snapshot = snapshot["providers"][provider]
+                limit = max(1, min(2000, int(query.get("limit", "40"))))
+                result = {k: v for k, v in snapshot.items() if k not in ("sessions", "providers")}
+                visible = snapshot["sessions"][:max(limit, snapshot["live_count"])]
+                opened = query.get("session_id")
+                if opened and not any(s["session_id"] == opened for s in visible):
+                    visible = visible + [s for s in snapshot["sessions"] if s["session_id"] == opened]
+                result["sessions"] = visible
+                result["provider"] = provider
+                self._json(result)
             except Exception as e:
                 self._json({"error": str(e)}, 500)
         elif sub == "/api/projects":
@@ -558,6 +584,23 @@ class Handler(BaseHTTPRequestHandler):
             # пометить ответ сессии просмотренным — снимает «новый ответ» в UI
             cu.mark_seen(data.get("session_id", ""))
             return self._json({"ok": True})
+        sid = data.get("session_id", "")
+        provider = data.get("provider") or ("codex" if sid and codex_usage.thread_info(sid) else "claude")
+        if provider not in ("claude", "codex"):
+            return self._json({"ok": False, "error": "Unknown provider"}, 400)
+        if provider == "codex":
+            if sub == "/api/run" and data.get("action") != "continue":
+                return self._json({"ok": False, "error": "Codex: use the session message field"}, 400)
+            try:
+                result = codex_usage.queue_message(sid, data.get("prompt") or data.get("task") or "")
+                result["msg"] = result["response"]
+                return self._json(result)
+            except ValueError as e:
+                return self._json({"ok": False, "error": str(e)}, 400)
+            except Exception as e:
+                return self._json({"ok": False, "error": str(e)}, 502)
+        if sid and codex_usage.thread_info(sid):
+            return self._json({"ok": False, "error": "Session provider mismatch"}, 400)
         if sub == "/api/chat":
             # Синхронный чат с сессией (resume): ответ возвращается прямо в веб.
             sid = data.get("session_id", "")
@@ -592,7 +635,7 @@ class Handler(BaseHTTPRequestHandler):
                         "response": "⚠ Не удалось впечатать в окно (%s). "
                                     "Окно сессии закрыто? Попробуй ещё раз." % msg})
                 # окна нет — открываем видимую консоль (resume) и печатаем туда
-                resume_in_console(name or "session", sid, path_, prompt)
+                resume_in_console(data.get("name") or "session", sid, path_, prompt)
                 return self._json({"ok": True, "injected": False,
                     "response": "🖥 Сессия была закрыта — открываю её консоль заново "
                                 "(claude --resume) и впечатываю сообщение в неё. Ответ "
@@ -729,7 +772,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     args = sys.argv[1:]
     if "--selftest" in args:
-        srv = ThreadingHTTPServer((HOST, PORT), Handler)
+        srv = LocalHTTPServer((HOST, PORT), Handler)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         import urllib.request
         u = f"http://{HOST}:{PORT}{BASE}/api/usage"
@@ -751,7 +794,7 @@ def main():
         srv.shutdown()
         print(f"selftest: usage={ok_usage} projects={ok_proj} html={ok_html} unauth_post={code}")
         return
-    srv = ThreadingHTTPServer((HOST, PORT), Handler)
+    srv = LocalHTTPServer((HOST, PORT), Handler)
     print(f"webapp on http://{HOST}:{PORT}{BASE}/  (Ctrl-C — стоп)")
     try:
         srv.serve_forever()

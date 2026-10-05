@@ -140,6 +140,11 @@ textarea{width:100%;min-height:96px;background:var(--card);border:1px solid var(
 <h1 style="display:flex;align-items:center;gap:10px"><span class="dotlogo"></span> ClaudeDock <span class="langsel" style="margin-left:auto;font-size:12px;display:inline-flex;gap:3px;font-weight:700"><b data-l="en" onclick="setLang('en')" style="cursor:pointer;padding:3px 8px;border-radius:7px">EN</b><b data-l="ru" onclick="setLang('ru')" style="cursor:pointer;padding:3px 8px;border-radius:7px">RU</b><b data-l="uk" onclick="setLang('uk')" style="cursor:pointer;padding:3px 8px;border-radius:7px">UK</b></span></h1>
 <div class="muted" id="sub" data-i18n="loading">loading…</div>
 
+<div id="provider-tabs" style="display:flex;gap:8px;margin-top:12px">
+  <button class="btn s" data-provider="all" onclick="selectProvider('all')">Claude + GPT</button>
+  <button class="btn s" data-provider="claude" onclick="selectProvider('claude')">Claude</button>
+  <button class="btn s" data-provider="codex" onclick="selectProvider('codex')">GPT / Codex</button>
+</div>
 <div class="stats" id="stats"></div>
 
 <div class="tabs">
@@ -297,7 +302,7 @@ function applyI18n(){
 function setLang(l){LANG=l;localStorage.setItem('cd_lang',l);applyI18n();try{tick();}catch(e){}}
 
 function ht(n){n=+n||0;if(n>=1e6)return (n/1e6).toFixed(2)+'M';if(n>=1e3)return (n/1e3).toFixed(1)+'k';return ''+Math.round(n)}
-function hc(u){u=+u||0;if(u>=100)return '$'+u.toFixed(0);if(u>=1)return '$'+u.toFixed(2);return '$'+u.toFixed(3)}
+function hc(u){if(u==null)return '—';u=+u||0;if(u>=100)return '$'+u.toFixed(0);if(u>=1)return '$'+u.toFixed(2);return '$'+u.toFixed(3)}
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function spark(v){const b='▁▂▃▄▅▆▇█';if(!v.length)return '';const m=Math.max(...v)||1;return v.map(x=>b[Math.min(7,Math.floor(x/m*7))]).join('')}
 function age(s){if(s<45)return t('now');if(s<3600)return (s/60|0)+' '+t('min');if(s<86400)return (s/3600|0)+' '+t('hr');return (s/86400|0)+' '+t('day')}
@@ -312,9 +317,19 @@ function showTab(t){
   if(t==='run' && !projects.length) loadProjects();
 }
 
+let selectedProvider=new URLSearchParams(location.search).get('provider')||localStorage.getItem('agent-provider')||'all';
+if(!['all','claude','codex'].includes(selectedProvider))selectedProvider='all';
+let sessionLimit=40, usagePending=false;
+function selectProvider(provider){selectedProvider=provider;sessionLimit=40;localStorage.setItem('agent-provider',provider);tick();}
 async function tick(){
-  let d; try{ d=await (await fetch('./api/usage',{cache:'no-store'})).json(); }catch(e){ return; }
+  if(usagePending)return;
+  usagePending=true;
+  const params=new URLSearchParams({provider:selectedProvider,limit:String(sessionLimit)});
+  if(window._curSid)params.set('session_id',window._curSid);
+  let d; try{ d=await (await fetch('./api/usage?'+params,{cache:'no-store'})).json(); }catch(e){ return; }finally{usagePending=false;}
   if(d.error){ document.getElementById('sub').textContent=t('error')+': '+d.error; return; }
+  if(d.provider && d.provider!==selectedProvider){tick();return;}
+  document.querySelectorAll('[data-provider]').forEach(b=>{b.style.borderColor=b.dataset.provider===selectedProvider?'var(--orange)':'';});
   document.getElementById('sub').textContent = new Date().toLocaleTimeString() + ' · '+t('autoupd');
   const days=Object.keys(d.daily||{}).sort().slice(-14).map(k=>d.daily[k].tokens);
   const runN=d.sessions.filter(s=>s.status==='run').length;
@@ -333,7 +348,7 @@ async function tick(){
   });
   window._sess=order;
   const AWL={question:'❓ '+t('aw_question'),permission:'⚠ '+t('aw_permission'),ask:'❓ '+t('aw_ask')};
-  document.getElementById('list').innerHTML = order.map(s=>{
+  document.getElementById('list').innerHTML = order.slice(0,Math.max(sessionLimit,d.live_count||0)).map(s=>{
     const [emo,nm]=splitEmoji(s.project); const w=Math.max(3,s.tokens_total/mx*100);
     const st=s.status||'old';
     const attn=((s.awaiting||s.unread)&&st!=='old')?' attn':'';
@@ -343,7 +358,7 @@ async function tick(){
     return '<div class="sess '+st+attn+'" onclick="openSheet(\''+s.session_id+'\')">'+
       '<div class="ava" style="background:hsl('+hue(s.project)+' 45% 30%)">'+esc(emo)+unread+'</div>'+
       '<div class="s-main"><div class="s-top"><span class="dot"></span>'+
-        '<span class="s-proj">'+esc(nm)+'</span>'+awb+
+        '<span class="s-proj">'+esc(nm)+'</span><span class="sub">'+esc(s.provider_label||'Claude')+'</span>'+awb+
         (s.subagents?'<span class="sub">+'+s.subagents+'</span>':'')+
         '<span class="s-age">'+age(s.age_sec)+'</span></div>'+
       '<div class="s-task">'+esc(s.title)+'</div>'+
@@ -354,6 +369,7 @@ async function tick(){
       resp+
       '</div></div>';
   }).join('') || '<div class="muted">'+t('no_sessions')+'</div>';
+  if(d.session_count>Math.max(sessionLimit,d.live_count||0)) document.getElementById('list').innerHTML+='<button class="btn s" onclick="sessionLimit+=40;tick()">+40 ('+d.session_count+')</button>';
   refreshOpenSheet(order);   // живое обновление открытой шторки (последний ответ/статус)
 }
 function st(n,l){return '<div class="stat"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'}
@@ -420,8 +436,9 @@ async function run(action){
 
 // Заполнить/обновить содержимое шторки (можно звать повторно — для live-обновления).
 function renderSheet(s){
+  document.querySelectorAll('[onclick="sheetAction(\'compact\')"], [onclick="sheetAction(\'clear\')"]').forEach(b=>b.hidden=s.provider==='codex');
   const [emo,nm]=splitEmoji(s.project);
-  document.getElementById('sh-proj').textContent=emo+' '+nm;
+  document.getElementById('sh-proj').textContent=emo+' '+nm+' · '+(s.provider_label||'Claude');
   const st=s.status||'old';
   const AWL={question:'❓ '+t('aw_question'),permission:'⚠ '+t('aw_permission'),ask:'❓ '+t('aw_ask')};
   const stEl=document.getElementById('sh-st');
@@ -530,7 +547,7 @@ async function sendChat(){
   if(tg&&tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
   try{
     const r=await fetch('./api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({initData,session_id:s.session_id,path:s.project_path,prompt})});
+      body:JSON.stringify({initData,provider:s.provider,session_id:s.session_id,path:s.project_path,prompt})});
     const j=await r.json();
     wait.textContent = j.ok ? (j.response||'(пусто)') : ('❌ '+(j.error||'ошибка'));
   }catch(e){ wait.textContent='❌ сеть/таймаут (длинный ответ может прийти позже)'; }
@@ -548,7 +565,7 @@ async function sheetAction(action){
   try{
     if(tg&&tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
     const r=await fetch('./api/run',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({initData,action,session_id:s.session_id,path:s.project_path,name:splitEmoji(s.project)[1],task})});
+      body:JSON.stringify({initData,provider:s.provider,action,session_id:s.session_id,path:s.project_path,name:splitEmoji(s.project)[1],task})});
     const j=await r.json();
     if(j.ok){ t.className='toast ok'; t.textContent='✅ '+(j.msg||'ок'); document.getElementById('sh-prompt').value=''; }
     else{ t.className='toast err'; t.textContent='❌ '+(j.error||'ошибка'); }

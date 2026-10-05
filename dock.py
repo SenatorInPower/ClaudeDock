@@ -30,7 +30,9 @@ from tkinter import ttk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageTk
 
 sys.path.insert(0, str(Path(__file__).parent))
-import claude_usage as cu
+import agent_usage as cu
+import builds
+import codex_usage
 import config
 import terminal_inject
 
@@ -68,6 +70,11 @@ def deliver(s: dict, prompt: str) -> str:
     """Доставить ход в сессию. Живая (есть PID) — ВПЕЧАТАТЬ прямо в её терминал
     (как будто набрал руками и нажал Enter): работа продолжается В ТОМ ЖЕ окне,
     ответ виден там же. Закрытая — фолбэк на headless `claude -p --resume`."""
+    if s.get("provider") == "codex":
+        try:
+            return codex_usage.queue_message(s["session_id"], prompt)["response"]
+        except Exception as e:
+            return "Codex: " + str(e)
     pid = s.get("pid")
     sid = s.get("session_id")
     path = s.get("project_path", "")
@@ -123,6 +130,10 @@ PAD_BOT = 12
 FRAMES = 24                          # кадров «дыхания»
 ANIM_MS = 40                         # ~25 fps
 REFRESH = 3.0
+BUILDS_REFRESH = 10.0                # процессов много — сборки сканируем реже голов
+BUILD_CELL = 62                      # ячейка «сборки» под головами: аватар, проект, что делает
+BUILD_HEAD = 26                      # заголовок «СБОРКИ · RAM»
+RAM_WARN_GB, RAM_RED_GB = 6.0, 3.0   # пороги очереди сборок (EMULATORS.md)
 
 PANEL = (27, 24, 20)
 PANEL_BORDER = (60, 54, 46)
@@ -342,6 +353,7 @@ class Dock:
         self.hover_id = None
         self.show_idle = False
         self.collapsed = False    # click the top count circle → fold the strip to just that number
+        self.builds = None        # builds.scan(): who is building / queued, free RAM
         self._win_x = 0
         self._win_y = 0
 
@@ -352,6 +364,7 @@ class Dock:
         self.canvas.bind("<Leave>", lambda e: self.hide_tooltip())
 
         threading.Thread(target=self._scan_loop, daemon=True).start()
+        threading.Thread(target=self._builds_loop, daemon=True).start()
         self._animate()
 
     # ---------- меню ----------
@@ -507,10 +520,11 @@ class Dock:
         send_btn = tk.Button(btnrow, text="▶ Отправить", command=do_send, bg=pc, fg="#1b1410",
                              font=("Segoe UI", 10, "bold"), bd=0, padx=14, pady=6)
         send_btn.pack(side="right")
-        tk.Button(btnrow, text="🗜 /compact", command=lambda: cmd("/compact"), bg="#272219",
-                  fg="#f4f1ea", bd=0, padx=10, pady=6).pack(side="left")
-        tk.Button(btnrow, text="🧹 /clear", command=lambda: cmd("/clear"), bg="#272219",
-                  fg="#f4f1ea", bd=0, padx=10, pady=6).pack(side="left", padx=(8, 0))
+        if s.get("provider") != "codex":
+            tk.Button(btnrow, text="🗜 /compact", command=lambda: cmd("/compact"), bg="#272219",
+                      fg="#f4f1ea", bd=0, padx=10, pady=6).pack(side="left")
+            tk.Button(btnrow, text="🧹 /clear", command=lambda: cmd("/clear"), bg="#272219",
+                      fg="#f4f1ea", bd=0, padx=10, pady=6).pack(side="left", padx=(8, 0))
         entry.focus_set()
 
     def flip_side(self):
@@ -531,6 +545,14 @@ class Dock:
             except Exception as ex:
                 log_crash("scan_loop", ex)
             time.sleep(REFRESH)
+
+    def _builds_loop(self):
+        while True:
+            try:
+                self.builds = builds.scan()
+            except Exception as ex:
+                log_crash("builds_loop", ex)
+            time.sleep(BUILDS_REFRESH)
 
     def _scan_once_async(self):
         threading.Thread(target=self._scan_once, daemon=True).start()
@@ -584,7 +606,14 @@ class Dock:
         show_mono = not compact
         n = len(heads)
         extra = 22 if overflow else 0
-        h = HEADER + n * cell + extra + PAD_BOT
+        # «Сборки»: кто собирается/ждёт очереди и сколько RAM свободно. Секция видна, когда есть
+        # что показать — сборка идёт или памяти меньше порога очереди.
+        bstate = self.builds or {}
+        bitems = [] if self.collapsed else (bstate.get("items") or [])[:4]
+        ram = bstate.get("ram_free_gb")
+        show_builds = not self.collapsed and (bitems or (ram is not None and ram < RAM_WARN_GB))
+        bextra = (BUILD_HEAD + len(bitems) * BUILD_CELL) if show_builds else 0
+        h = HEADER + n * cell + extra + bextra + PAD_BOT
         w = WIN_W
 
         base = Image.new("RGBA", (w, h), TRANSPARENT + (255,))
@@ -629,6 +658,11 @@ class Dock:
             live = status in ("run", "wait")
             ccol = proj_col if live else "#%02x%02x%02x" % _mix(proj_col, "#4a463f", 0.62)
             coin = _coin(ccol, s["project"] if _custom_avatar(s["project"]) is not None else None, CS)
+            if s.get("provider") == "codex":
+                coin = coin.copy()
+                badge = ImageDraw.Draw(coin)
+                badge.rounded_rectangle((CS - 13, CS - 12, CS, CS), radius=3, fill=(23, 105, 93, 255))
+                badge.text((CS - 10, CS - 12), "G", font=fb, fill=(255, 255, 255, 255))
             coins.append((coin, cx - CS // 2, cy - CS // 2))
             glows.append(_glow(STATUS_COLOR[status], GS) if live else None)
             # КОЛЬЦО-ОБВОДКА статусом: оранжевый=работает, синий=ждёт
@@ -638,7 +672,7 @@ class Dock:
                           outline=_hex(STATUS_COLOR[status]) + (255,), width=(2 if compact else 3))
             # монограмма (только в обычном режиме)
             if show_mono:
-                mono = monogram(s["project"])
+                mono = "GPT" if s.get("provider") == "codex" else monogram(s["project"])
                 tb = d.textbbox((0, 0), mono, font=fm)
                 d.text((cx - (tb[2] - tb[0]) / 2, cy + CS // 2 + 6), mono, font=fm,
                        fill=(TEXT if live else DIM) + (255,))
@@ -675,6 +709,45 @@ class Dock:
             d.rounded_rectangle([cx - 17, ty, cx + 17, ty + 17], radius=8, fill=(70, 63, 53, 255))
             d.text((cx - (tb[2] - tb[0]) / 2, ty + 9 - (tb[3] - tb[1]) / 2 - tb[1]), txt, font=ff, fill=TEXT + (255,))
             regions.append((0, y, w, y + extra, "__overflow__"))
+            y += extra
+
+        spinners = []
+        if show_builds:
+            y += 3
+            d.line([PANEL_X0 + 8, y, PANEL_X1 - 8, y], fill=PANEL_BORDER + (255,), width=1)
+            fs = _font(7, True)
+            t1 = "СБОРКИ"
+            tb = d.textbbox((0, 0), t1, font=fs)
+            d.text((cx - (tb[2] - tb[0]) / 2, y + 3), t1, font=fs, fill=DIM + (255,))
+            if ram is not None:
+                rcol = (235, 70, 55) if ram < RAM_RED_GB else ((245, 166, 35) if ram < RAM_WARN_GB else (143, 166, 91))
+                t2 = "RAM %g" % ram
+                tb = d.textbbox((0, 0), t2, font=fs)
+                d.text((cx - (tb[2] - tb[0]) / 2, y + 13), t2, font=fs, fill=rcol + (255,))
+            regions.append((0, y, w, y + BUILD_HEAD, {"__build__": True, "__ram__": True,
+                                                      "session_id": "build:ram", "ram_free_gb": ram,
+                                                      "lock": bstate.get("lock")}))
+            y += BUILD_HEAD - 3
+            fm2 = _font(8, True)
+            for b in bitems:
+                by = y + 18
+                col = color_for(b["project"])
+                coin = _coin(col, b["project"] if _custom_avatar(b["project"]) is not None else None, 28)
+                coins.append((coin, cx - 14, by - 14))
+                glows.append(None)
+                waiting = b["label"] == "ждёт"
+                spinners.append((cx, by, 18, _hex(STATUS_COLOR["wait" if waiting else "run"]), waiting))
+                age = b.get("age_min", 0)
+                txt = "%s %s" % (b["label"], ("%dм" % age) if age < 100 else ("%dч" % (age // 60)))
+                mono = monogram(b["project"])
+                tb = d.textbbox((0, 0), mono, font=fm2)
+                d.text((cx - (tb[2] - tb[0]) / 2, by + 20), mono, font=fm2, fill=_hex(col) + (255,))
+                tb = d.textbbox((0, 0), txt, font=fm2)
+                d.text((cx - (tb[2] - tb[0]) / 2, by + 31), txt, font=fm2, fill=TEXT + (255,))
+                regions.append((0, y, w, y + BUILD_CELL, dict(b, __build__=True,
+                                                               session_id="build:%s:%s" % (b["project"], b["pid"]),
+                                                               lock=bstate.get("lock"))))
+                y += BUILD_CELL
 
         frames = []
         for f in range(FRAMES):
@@ -686,6 +759,11 @@ class Dock:
                     gg = _alpha_scaled(g, inten)
                     fr.alpha_composite(gg, (cx - GS // 2, cyp + CS // 2 - GS // 2))
                 fr.alpha_composite(coin, (cxp, cyp))
+            if spinners:
+                dd = ImageDraw.Draw(fr)
+                for (sx, sy, r, col, slow) in spinners:
+                    start = int(360 * t * (1 if slow else 2)) % 360
+                    dd.arc([sx - r, sy - r, sx + r, sy + r], start, start + 110, fill=col + (255,), width=3)
             frames.append(fr)
         return frames, regions, (w, h)
 
@@ -751,6 +829,9 @@ class Dock:
 
     def show_tooltip(self, s, wy):
         self.hide_tooltip()
+        if s.get("__build__"):
+            self._show_build_tooltip(s, wy)
+            return
         tip = tk.Toplevel(self.root)
         tip.overrideredirect(True)
         tip.wm_attributes("-topmost", True)
@@ -762,7 +843,7 @@ class Dock:
         frame = tk.Frame(tip, bg="#1f1d1a", highlightbackground=pc,
                          highlightthickness=1, bd=0)
         frame.pack()
-        proj = strip_emoji(s["project"]) + (f"  +{s['subagents']} sub" if s["subagents"] else "")
+        proj = s.get("provider_label", "Claude") + " · " + strip_emoji(s["project"]) + (f"  +{s['subagents']} sub" if s["subagents"] else "")
         rows = [
             (proj, ("Segoe UI", 10, "bold"), pc),
             (s["title"][:64], ("Segoe UI", 9), "#f4f1ea"),
@@ -824,6 +905,44 @@ class Dock:
         tip.geometry(f"+{x}+{y}")
         self.tooltip = tip
 
+    def _show_build_tooltip(self, b, wy):
+        tip = tk.Toplevel(self.root)
+        tip.overrideredirect(True)
+        tip.wm_attributes("-topmost", True)
+        pc = color_for(b.get("project", "?")) if not b.get("__ram__") else "#8fa65b"
+        frame = tk.Frame(tip, bg="#1f1d1a", highlightbackground=pc, highlightthickness=1, bd=0)
+        frame.pack()
+        rows = []
+        if b.get("__ram__"):
+            ram = b.get("ram_free_gb")
+            rows.append(("Память машины", ("Segoe UI", 10, "bold"), pc))
+            if ram is not None:
+                state = ("красная зона — Windows убивает процессы" if ram < RAM_RED_GB else
+                         "сборки/эмуляторы ждут очереди" if ram < RAM_WARN_GB else "можно собирать")
+                rows.append((f"свободно {ram:g} ГБ — {state}", ("Segoe UI", 9), "#f4f1ea"))
+        else:
+            rows.append((b["project"], ("Segoe UI", 10, "bold"), pc))
+            rows.append((b.get("activity") or b["label"], ("Segoe UI", 9), "#f4f1ea"))
+            rows.append((f"PID {b['pid']} · {b.get('ram_gb', 0):g} ГБ · {_age_str(60 * b.get('age_min', 0))}",
+                         ("Segoe UI", 8), "#9a948a"))
+            if len(b.get("parts") or []) > 1:
+                rows.append(("ещё: " + ", ".join(b["parts"][1:]), ("Segoe UI", 8), "#9a948a"))
+        lock = b.get("lock")
+        if lock:
+            rows.append((f"build-lock: {lock.get('owner')} (PID {lock.get('pid')}, {lock.get('age_h')} ч)",
+                         ("Segoe UI", 8), "#e8d9b0"))
+        rows.append(("ЛКМ — папка проекта" if b.get("path") else "", ("Segoe UI", 7), "#6f6a62"))
+        for txt, font, col in rows:
+            if txt:
+                tk.Label(frame, text=txt, bg="#1f1d1a", fg=col, font=font, anchor="w",
+                         justify="left", wraplength=330).pack(fill="x", padx=10, pady=1)
+        tip.update_idletasks()
+        w, h = tip.winfo_width(), tip.winfo_height()
+        x = self._win_x + WIN_W + 8 if self.side == "left" else self._win_x - w - 8
+        y = max(6, min(self._win_y + wy - h // 2, self.sh - h - 10))
+        tip.geometry(f"+{x}+{y}")
+        self.tooltip = tip
+
     def hide_tooltip(self):
         if self.tooltip is not None:
             try:
@@ -840,6 +959,10 @@ class Dock:
             self._force_render()
             return
         s = self._hit(e.x, e.y)
+        if isinstance(s, dict) and s.get("__build__"):
+            if s.get("path"):
+                self._open_folder(s["path"])
+            return
         if isinstance(s, dict):
             cu.mark_seen(s.get("session_id"))      # клик снимает «непрочитано»
             self.open_detail(s["session_id"])
@@ -958,7 +1081,7 @@ class Dock:
             if s.get("unread"):
                 stv = "🔴 " + stv
             item = tree.insert("", "end", values=(
-                stv, strip_emoji(s["project"]), s["title"][:72],
+                stv, s.get("provider_label", "Claude") + " · " + strip_emoji(s["project"]), s["title"][:72],
                 cu.human_tokens(s["tokens_total"]), cu.human_cost(s["cost_usd"]),
                 "/".join(s["models"][:2]), s["msg_count"], age_s), tags=tags)
             self._detail_map[item] = s

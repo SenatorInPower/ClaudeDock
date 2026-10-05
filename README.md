@@ -15,6 +15,16 @@ Who's working, who's waiting on you, who just replied — one look. Costs **0 ex
 
 </div>
 
+### GPT / Codex sessions
+
+The local dock and Telegram Mini App also show Codex sessions. Use **Claude / GPT / Codex** filters for separate session, daily token, and historical token counters. GPT heads carry a `GPT` label. Counters read local Codex databases and rollout files; cached input and reasoning tokens are not counted twice. Subscription charges are not inferred from token counts, so Codex cost is shown as `—`.
+
+Open an existing Codex card and send a message to queue it in that same thread using the installed `codex queue` command. The confirmation means **queued**, not completed. Replies appear as the session updates. A closed thread must be resumed in Codex. Claude-only `/compact` and `/clear` buttons are hidden on Codex cards. Existing Telegram-owner, password, and local-access checks apply before dispatch.
+
+Requires a local Codex installation supporting `codex queue` (verified with 0.154.0). `CODEX_HOME` is respected; an optional `codex_bin` setting overrides executable discovery. This integration depends on the local Codex database/rollout format and never reads `auth.json`. New-session launch still uses Claude.
+
+Local checks: `python -m unittest test_codex_integration -v`. With the web server running, `python verify_codex_ui.py` checks provider filtering and message routing in a mobile viewport; it intercepts the command and sends no real agent message.
+
 > **The problem:** you run 5–10 Claude Code sessions at once — one per repo, per terminal, per worktree — and you constantly alt‑tab to figure out *"is this one working, finished, or stuck waiting for my answer?"*
 >
 > **ClaudeDock** answers that without you looking for it: a column of avatars on your screen edge, one per live session, colour‑coded and badged. Read the last reply or write back into any session from your **desktop, browser, or phone** — never hunting through windows again.

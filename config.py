@@ -48,6 +48,9 @@ _DEFAULTS = {
     # (git-ignored). Empty = the VPS button stays hidden. The server keeps its OWN
     # Claude auth (its `claude login` / ANTHROPIC_API_KEY) — never put keys here.
     "vps": {},
+    # Optional: folder with the build fleet's machine_status.py — the dock then shows
+    # which projects are building / queued and the free RAM. Empty = strip hidden.
+    "fleet_dir": "",
 }
 
 # Built-in display names for common system locations (kept generic / no PII).
